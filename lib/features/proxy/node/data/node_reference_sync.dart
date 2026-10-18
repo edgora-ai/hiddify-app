@@ -7,6 +7,10 @@ abstract final class NodeReferenceSync {
   /// Outbound types that hold member references (option/group.go, balancer.go).
   static const groupTypes = {'selector', 'urltest', 'balancer'};
 
+  // constant/proxy.go TypeCCM/TypeOCM; option/ccm.go and option/ocm.go
+  // explicitly mark only these services' top-level detour as an outbound ref.
+  static const _outboundDetourServiceTypes = {'ccm', 'ocm'};
+
   // Required outbound dependencies from the bundled Go option types. Scan and
   // rename share this list so a dependency cannot be renamed but missed by the
   // service's delete guard (ReferenceCheck.detours). '*' means array entries,
@@ -61,6 +65,10 @@ abstract final class NodeReferenceSync {
       }
     }
 
+    for (final ref in _dnsOutboundRefs(config)) {
+      if (_dnsMatcherReferences(ref.rule['outbound'], tag)) detours.add(ref.path);
+    }
+
     final route = config['route'];
     if (route is Map<String, dynamic>) {
       if (route['final'] == tag) finalRoute = true;
@@ -85,6 +93,11 @@ abstract final class NodeReferenceSync {
   ) sync* {
     for (final path in _dependencyPaths) {
       yield* _refsAtPath(config, path, 0, '');
+    }
+    // Do not treat every service (or its metadata) as a dialer. Keeping this in
+    // the shared iterator feeds scan/delete guards and rename/replacement alike.
+    for (final ref in _refsAtPath(config, const ['services', '*', 'detour'], 0, '')) {
+      if (_outboundDetourServiceTypes.contains(ref.owner['type'])) yield ref;
     }
   }
 
@@ -111,6 +124,39 @@ abstract final class NodeReferenceSync {
     }
   }
 
+  static Iterable<({Map<String, dynamic> rule, String path})> _dnsOutboundRefs(Map<String, dynamic> config) sync* {
+    final dns = config['dns'];
+    if (dns is Map<String, dynamic>) yield* _dnsRuleMatchers(dns['rules'], 'dns.rules');
+  }
+
+  // option/rule_dns.go: only default DNS rules own the outbound matcher;
+  // logical rules own child rules, not a matcher of their own. Do not recurse
+  // into unknown rule types, ordinary fields or a default rule's unknown rules.
+  static Iterable<({Map<String, dynamic> rule, String path})> _dnsRuleMatchers(dynamic rules, String path) sync* {
+    if (rules is! List) return;
+    for (var i = 0; i < rules.length; i++) {
+      final rule = rules[i];
+      if (rule is! Map<String, dynamic>) continue;
+      final here = '$path[$i]';
+      final type = rule['type'] ?? '';
+      if (type == 'logical') {
+        if (rule['mode'] == 'and' || rule['mode'] == 'or') {
+          yield* _dnsRuleMatchers(rule['rules'], '$here.rules');
+        }
+      } else if (type == '' || type == 'default') {
+        final matcher = rule['outbound'];
+        if (matcher is String || matcher is List && matcher.every((item) => item is String)) {
+          yield (rule: rule, path: '$here.outbound');
+        }
+      }
+    }
+  }
+
+  // route/rule/rule_item_outbound.go reserves "any" for nonempty outbound
+  // metadata. It is never a literal tag reference, even in a mixed tag list.
+  static bool _dnsMatcherReferences(dynamic matcher, String tag) =>
+      tag != 'any' && (matcher == tag || matcher is List && matcher.contains(tag));
+
   static void _scanRules(List rules, String tag, List<String> out, String path) {
     for (var i = 0; i < rules.length; i++) {
       final r = rules[i];
@@ -125,8 +171,12 @@ abstract final class NodeReferenceSync {
   }
 
   /// Applies a rename inside [config] (mutates it). Call [check] first and
-  /// refuse when [ReferenceCheck.hasBlockingRefs] is true.
+  /// refuse when [ReferenceCheck.hasBlockingRefs] is true. A DNS matcher cannot
+  /// target the reserved "any" tag; that rename is rejected before any writes.
   static void applyRename({required Map<String, dynamic> config, required String oldTag, required String newTag}) {
+    if (newTag == 'any' && _dnsOutboundRefs(config).any((ref) => _dnsMatcherReferences(ref.rule['outbound'], oldTag))) {
+      throw ArgumentError.value(newTag, 'newTag', 'reservedDnsOutboundMatcher');
+    }
     final outbounds = config['outbounds'];
     if (outbounds is List) {
       for (final o in outbounds) {
@@ -147,6 +197,17 @@ abstract final class NodeReferenceSync {
     }
     for (final ref in _dependencyRefs(config)) {
       if (ref.owner[ref.key] == oldTag) ref.owner[ref.key] = newTag;
+    }
+    for (final ref in _dnsOutboundRefs(config)) {
+      final matcher = ref.rule['outbound'];
+      if (!_dnsMatcherReferences(matcher, oldTag)) continue;
+      if (matcher is List) {
+        for (var i = 0; i < matcher.length; i++) {
+          if (matcher[i] == oldTag) matcher[i] = newTag;
+        }
+      } else {
+        ref.rule['outbound'] = newTag;
+      }
     }
   }
 
@@ -192,8 +253,9 @@ class ReferenceCheck {
   /// Whether `route.final` points at the tag.
   final bool finalRoute;
 
-  /// Required outbound dependencies, including DNS/endpoint detours and
-  /// downloader detours. Non-outbound owners use full schema paths.
+  /// Required outbound dependencies, including DNS/endpoint, CCM/OCM service
+  /// and downloader detours, plus DNS outbound matchers. Non-outbound owners
+  /// use full schema paths. DNS matchers share this existing delete-guard list.
   /// Rename/replacement syncs these; delete without replacement must refuse.
   final List<String> detours;
 

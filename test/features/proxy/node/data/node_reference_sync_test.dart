@@ -112,7 +112,377 @@ Map<String, dynamic> dependencyConfig() => {
   },
 };
 
+Map<String, dynamic> serviceDetourConfig(String type) => {
+  'outbounds': [
+    {'type': 'direct', 'tag': 'A'},
+    {'type': 'direct', 'tag': 'B'},
+  ],
+  'services': [
+    {'type': 'unknown-service', 'tag': 'unknown', 'detour': 'A'},
+    {
+      'type': type,
+      'tag': 'A',
+      'detour': 'A',
+      'credential_path': 'A',
+      'headers': {'X-Label': 'A'},
+      'users': [
+        {'name': 'A', 'token': 'synthetic-token'},
+      ],
+      'metadata': {'type': type, 'detour': 'A'},
+    },
+    {'type': 'api', 'tag': 'other-service', 'detour': 'A'},
+  ],
+  'metadata': {
+    'services': [
+      {'type': 'ccm', 'detour': 'A'},
+      {'type': 'ocm', 'detour': 'A'},
+    ],
+    'detour': 'A',
+  },
+};
+
+Map<String, dynamic> dnsMatcherConfig({String matcherTag = 'A'}) => {
+  'outbounds': [
+    {'type': 'direct', 'tag': 'A'},
+    {'type': 'direct', 'tag': 'B'},
+  ],
+  'dns': {
+    'servers': [
+      {'type': 'local', 'tag': 'A'},
+    ],
+    'final': 'A',
+    'rules': [
+      {
+        'outbound': matcherTag,
+        'action': 'route',
+        'server': 'A',
+        'domain': ['A'],
+        'inbound': ['A'],
+      },
+      {
+        'type': 'default',
+        'outbound': [matcherTag, 'B', 'any', matcherTag],
+        'action': 'route',
+        'server': 'A',
+      },
+      {'type': '', 'outbound': matcherTag, 'action': 'route', 'server': 'A'},
+      {
+        'type': 'logical',
+        'mode': 'and',
+        'rules': [
+          {
+            'outbound': [matcherTag, 'B'],
+            'domain': ['one.example.test'],
+          },
+          {
+            'type': 'logical',
+            'mode': 'or',
+            'rules': [
+              {'type': 'default', 'outbound': matcherTag},
+              {
+                'domain': ['A'],
+                'inbound': ['A'],
+              },
+            ],
+          },
+        ],
+        'action': 'route',
+        'server': 'A',
+      },
+    ],
+  },
+};
+
 void main() {
+  group('DNS outbound matchers', () {
+    const matcherPaths = [
+      'dns.rules[0].outbound',
+      'dns.rules[1].outbound',
+      'dns.rules[2].outbound',
+      'dns.rules[3].rules[0].outbound',
+      'dns.rules[3].rules[1].rules[0].outbound',
+    ];
+
+    test('default string and list matchers in nested logical rules reach the delete guard', () {
+      final config = dnsMatcherConfig();
+      final before = jsonEncode(config);
+      final check = NodeReferenceSync.check(config: config, tag: 'A');
+      expect(check.detours, matcherPaths);
+      expect(check.hasAnyRef, isTrue);
+      expect(check.groups, isEmpty);
+      expect(check.defaults, isEmpty);
+      expect(check.finalRoute, isFalse);
+      expect(check.hasBlockingRefs, isFalse); // Syncable on rename; detours block delete.
+      expect(jsonEncode(config), before);
+    });
+
+    test('rename updates only DNS outbound matcher fields through logical rules', () {
+      final config = dnsMatcherConfig();
+      NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'C');
+      expect(config, dnsMatcherConfig(matcherTag: 'C'));
+      expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+      expect(NodeReferenceSync.check(config: config, tag: 'C').detours, matcherPaths);
+    });
+
+    test('replacement retargets scalar and list matchers before deleting the old outbound', () {
+      final config = dnsMatcherConfig();
+      final expected = dnsMatcherConfig(matcherTag: 'B');
+      (expected['outbounds'] as List).removeAt(0);
+      NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'B');
+      expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+      expect(NodeReferenceSync.applyDeleteMemberRefs(config: config, tag: 'A'), isEmpty);
+      (config['outbounds'] as List).removeWhere((o) => (o as Map)['tag'] == 'A');
+      expect(config, expected);
+      expect(NodeReferenceSync.check(config: config, tag: 'B').detours, matcherPaths);
+    });
+
+    test('unknown rule types and independent namespaces are neither scanned nor rewritten', () {
+      final config = <String, dynamic>{
+        'dns': {
+          'final': 'A',
+          'servers': [
+            {
+              'type': 'local',
+              'tag': 'A',
+              'domain_resolver': {'server': 'A'},
+            },
+          ],
+          'rules': [
+            {
+              'type': 'future-rule',
+              'outbound': 'A',
+              'rules': [
+                {'type': 'default', 'outbound': 'A'},
+              ],
+            },
+            {'type': 7, 'outbound': 'A'},
+            {'type': 'DEFAULT', 'outbound': 'A'},
+            {
+              'type': 'default',
+              'server': 'A',
+              'domain': ['A'],
+              'inbound': ['A'],
+              'domain_resolver': {'server': 'A'},
+              'rules': [
+                {'outbound': 'A'},
+              ],
+              'metadata': {
+                'outbound': 'A',
+                'rules': [
+                  {'outbound': 'A'},
+                ],
+              },
+              'future': {'outbound': 'A'},
+            },
+            {
+              'type': 'logical',
+              'mode': 'and',
+              'outbound': 'A',
+              'rules': [
+                {
+                  'domain': ['A'],
+                },
+              ],
+              'metadata': {'outbound': 'A'},
+            },
+            {
+              'type': 'logical',
+              'mode': 'future-mode',
+              'rules': [
+                {'outbound': 'A'},
+              ],
+            },
+            {
+              'outbound': {'tag': 'A'},
+            },
+            {
+              'outbound': [
+                'A',
+                {'outbound': 'A'},
+              ],
+            },
+            null,
+            7,
+          ],
+        },
+        'metadata': {
+          'dns': {
+            'rules': [
+              {'outbound': 'A'},
+            ],
+          },
+        },
+      };
+      final before = jsonEncode(config);
+      expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+      NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'C');
+      expect(NodeReferenceSync.applyDeleteMemberRefs(config: config, tag: 'A'), isEmpty);
+      expect(jsonEncode(config), before);
+    });
+
+    test('non-array DNS rules and logical child containers are left untouched', () {
+      for (final rules in [
+        {'outbound': 'A'},
+        [
+          {
+            'type': 'logical',
+            'mode': 'and',
+            'rules': {'outbound': 'A'},
+          },
+        ],
+      ]) {
+        final config = <String, dynamic>{
+          'dns': {'rules': rules},
+        };
+        final before = jsonEncode(config);
+        expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+        NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'C');
+        expect(jsonEncode(config), before);
+      }
+    });
+
+    test('route action targets remain blocking alongside DNS logical matcher references', () {
+      final config = dnsMatcherConfig();
+      config['route'] = {
+        'rules': [
+          {
+            'type': 'logical',
+            'mode': 'and',
+            'rules': [
+              {
+                'domain': ['route.example.test'],
+              },
+            ],
+            'action': 'route',
+            'outbound': 'A',
+          },
+        ],
+      };
+      final check = NodeReferenceSync.check(config: config, tag: 'A');
+      expect(check.detours, matcherPaths);
+      expect(check.ruleTargets, ['route.rules[0]']);
+      expect(check.hasBlockingRefs, isTrue);
+    });
+
+    test('any remains a wildcard rather than a literal outbound tag', () {
+      final config = <String, dynamic>{
+        'dns': {
+          'rules': [
+            {'outbound': 'any', 'action': 'route', 'server': 'dns'},
+            {
+              'outbound': ['any', 'A'],
+              'action': 'route',
+              'server': 'dns',
+            },
+          ],
+        },
+      };
+      final before = jsonEncode(config);
+      expect(NodeReferenceSync.check(config: config, tag: 'any').hasAnyRef, isFalse);
+      expect(NodeReferenceSync.check(config: config, tag: 'A').detours, ['dns.rules[1].outbound']);
+      NodeReferenceSync.applyRename(config: config, oldTag: 'any', newTag: 'C');
+      expect(jsonEncode(config), before);
+    });
+
+    test('renaming a DNS-matched tag to any refuses before mutating other references', () {
+      final config = dnsMatcherConfig();
+      config['route'] = {'final': 'A'};
+      config['outbounds'][1]['detour'] = 'A';
+      final before = jsonEncode(config);
+      expect(() => NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'any'), throwsArgumentError);
+      expect(jsonEncode(config), before);
+    });
+  });
+
+  group('CCM and OCM service detours', () {
+    for (final type in ['ccm', 'ocm']) {
+      test('$type detour reaches the delete guard without any group reference', () {
+        final config = serviceDetourConfig(type);
+        final before = jsonEncode(config);
+        final check = NodeReferenceSync.check(config: config, tag: 'A');
+        expect(check.detours, ['services[1].detour']);
+        expect(check.hasAnyRef, isTrue);
+        expect(check.groups, isEmpty);
+        expect(check.defaults, isEmpty);
+        expect(check.finalRoute, isFalse);
+        // Rename is safe; the existing delete guard refuses nonempty detours.
+        expect(check.hasBlockingRefs, isFalse);
+        expect(jsonEncode(config), before);
+      });
+
+      test('$type rename changes only the typed service detour', () {
+        final config = serviceDetourConfig(type);
+        final expected = jsonDecode(jsonEncode(config)) as Map<String, dynamic>;
+        expected['services'][1]['detour'] = 'C';
+        NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'C');
+        expect(config, expected);
+        expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+        expect(NodeReferenceSync.check(config: config, tag: 'C').detours, ['services[1].detour']);
+      });
+
+      test('$type replacement retargets its detour before deleting the old outbound', () {
+        final config = serviceDetourConfig(type);
+        final expected = jsonDecode(jsonEncode(config)) as Map<String, dynamic>;
+        expected['services'][1]['detour'] = 'B';
+        (expected['outbounds'] as List).removeAt(0);
+        NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'B');
+        expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+        expect(NodeReferenceSync.applyDeleteMemberRefs(config: config, tag: 'A'), isEmpty);
+        (config['outbounds'] as List).removeWhere((o) => (o as Map)['tag'] == 'A');
+        expect(config, expected);
+        expect(NodeReferenceSync.check(config: config, tag: 'B').detours, ['services[1].detour']);
+      });
+    }
+
+    test('unknown services and same-named metadata are not references or mutation targets', () {
+      final config = <String, dynamic>{
+        'services': [
+          null,
+          7,
+          {
+            'type': 'unknown-service',
+            'detour': 'A',
+            'metadata': {'type': 'ccm', 'detour': 'A'},
+          },
+          {'type': 'api', 'detour': 'A'},
+          {'type': 'CCM', 'detour': 'A'},
+          {'detour': 'A'},
+          {
+            'type': 'ccm',
+            'metadata': {'detour': 'A'},
+          },
+          {
+            'type': 'ocm',
+            'detour': 'B',
+            'metadata': {'detour': 'A'},
+          },
+        ],
+        'metadata': {
+          'services': [
+            {'type': 'ccm', 'detour': 'A'},
+            {'type': 'ocm', 'detour': 'A'},
+          ],
+          'detour': 'A',
+        },
+      };
+      final before = jsonEncode(config);
+      expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+      NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'C');
+      expect(NodeReferenceSync.applyDeleteMemberRefs(config: config, tag: 'A'), isEmpty);
+      expect(jsonEncode(config), before);
+    });
+
+    test('a service-like object outside the services array is left untouched', () {
+      final config = <String, dynamic>{
+        'services': {'type': 'ccm', 'detour': 'A'},
+      };
+      final before = jsonEncode(config);
+      expect(NodeReferenceSync.check(config: config, tag: 'A').hasAnyRef, isFalse);
+      NodeReferenceSync.applyRename(config: config, oldTag: 'A', newTag: 'C');
+      expect(jsonEncode(config), before);
+    });
+  });
+
   group('scoped outbound dependencies', () {
     test('DNS detour reaches the service delete guard without a group reference', () {
       final config = <String, dynamic>{

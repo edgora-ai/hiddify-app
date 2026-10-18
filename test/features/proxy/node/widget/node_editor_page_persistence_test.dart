@@ -7,7 +7,6 @@ import 'package:go_router/go_router.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/features/profile/data/profile_data_providers.dart';
 import 'package:hiddify/features/proxy/node/data/node_json_adapter.dart';
-import 'package:hiddify/features/proxy/node/model/node_editor_state.dart';
 import 'package:hiddify/features/proxy/node/notifier/node_editor_notifier.dart';
 import 'package:hiddify/features/proxy/node/widget/fields/node_form_widgets.dart';
 import 'package:hiddify/features/proxy/node/widget/node_editor_page.dart';

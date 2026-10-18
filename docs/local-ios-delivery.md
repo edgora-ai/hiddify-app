@@ -91,6 +91,10 @@ The Form callback window and the two widget tests' real file/database waits are 
 
 The remaining IME/save widget case reported that tapping Save did not start a save. Its actual trigger still needs correction and verification; the subsequent null result is not accepted as success. The real-async test repair and frame-helper correction received independent source review, but the complete test and targeted-analysis gates remain unmet. No new package or installation follows from this partial result.
 
+[Run 39165819361](https://github.com/edgora-ai/hiddify-app/actions/runs/39165819361), at `3ac4f3a8`, passed all 403 visible cases across all 18 files, with zero skips and one successful global reporter completion. The real Dart-to-Go parent, all 12 distinct subcases, and package completion also passed. The final source/lock gate succeeded. The run still failed its first executed targeted-analysis step: two warnings were blocking, alongside 59 informational diagnostics under the existing nonfatal-info policy. One production call used a test-visible parser entry; one widget test retained an unused import.
+
+The narrow analysis repair routes override-only metadata through the existing production `offlineUpdate` adapter, which parses and maps an entry without validating or rewriting the configuration, and removes the unused test import. It does not suppress diagnostics, relax the CI gate, expose the test-only parser, or change save/CAS locking. The repaired exact candidate still requires independent source review and its own complete test and analysis results before merge. Local packaging remains blocked separately as described above.
+
 ## Local package path
 
 The legacy `ios-libs` target downloads a published Core and can overwrite the local framework. It is not used for this source delivery. The legacy Core preparation also performs unrelated dependency updates and tool installation; the separate `ios-local` entry avoids that path.

@@ -339,9 +339,12 @@ class ProfileRepositoryImpl with ExceptionHandler, InfraLogger implements Profil
     }
     // Override-only save: parse current metadata, but never validate/rewrite the
     // config file. The details page's display projection is not a write source.
-    final parsed = ProfileParser.parse(tempFilePath: _profilePathResolver.file(profile.id).path, profile: updated);
+    final parsed = _profileParser.offlineUpdate(
+      tempFilePath: _profilePathResolver.file(profile.id).path,
+      profile: updated,
+    );
     if (parsed.isLeft()) return left(parsed.getLeft().toNullable()!);
-    await _profileDataSource.edit(profile.id, parsed.getRight().toNullable()!.toUpdateEntry());
+    await _profileDataSource.edit(profile.id, parsed.getRight().toNullable()!);
     return right(unit);
   });
 

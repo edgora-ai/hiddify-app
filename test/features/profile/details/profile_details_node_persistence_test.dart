@@ -26,13 +26,21 @@ void main() {
   late TestDialogs dialogs;
   final t = TranslationsEn();
   final details = profileDetailsNotifierProvider(testProfileId);
+  final child = nodeEditorNotifierProvider(testProfileId, null);
 
   setUp(() async {
     storage = await ProfileCommitHarness.create();
     repository = storage.repository();
     await storage.seed();
     dialogs = TestDialogs();
-    container = editorContainer(repository, dialogs: dialogs);
+    container = editorContainer(
+      repository,
+      dialogs: dialogs,
+      overrides: [
+        details.overrideWith(ObservedProfileDetailsNotifier.new),
+        child.overrideWith(ObservedNodeEditorNotifier.new),
+      ],
+    );
     await container.read(profileRepositoryProvider.future);
     await container.read(translationsProvider.future);
     container.listen(details, (_, _) {});
@@ -112,11 +120,15 @@ void main() {
   });
 
   testWidgets('parent details -> add child -> return -> fallback toggle cannot overwrite B', (tester) async {
-    await tester.runAsync(() => container.read(details.future));
-    final parentSnapshot = container.read(details).requireValue.configContent;
-    final child = nodeEditorNotifierProvider(testProfileId, null);
-    container.listen(child, (_, _) {});
-    await tester.runAsync(() => container.read(child.future));
+    final parent = await tester.runAsync(() async {
+      final loaded = await container.read(details.future);
+      // The child provider must start its File/SQLite work here, not in FakeAsync.
+      container.listen(child, (_, _) {});
+      await container.read(child.future);
+      return loaded;
+    });
+    expect(parent, isNotNull);
+    final parentSnapshot = parent!.configContent;
     final router = GoRouter(
       routes: [
         GoRoute(
@@ -145,21 +157,20 @@ void main() {
     await tester.pumpAndSettle();
     unawaited(router.push<void>('/node'));
     await tester.pumpAndSettle();
-    final editor = container.read(child.notifier);
+    final editor = container.read(child.notifier) as ObservedNodeEditorNotifier;
     editor.switchProtocol('trojan', keepName: 'B');
     editor.setPath(['server'], 'b.example.invalid');
     editor.setPath(['password'], 'new-password');
     editor.setPath(['future_added_option'], {'preserved': true});
     final submitted = NodeJson.deepCopyMap(container.read(child).requireValue.draft);
     await tester.pumpAndSettle();
-    final childSaved = Completer<void>();
-    final childSubscription = container.listen(child, (_, next) {
-      final data = next.asData?.value;
-      if (data != null && data.hasSaved && !data.isSaving && !childSaved.isCompleted) childSaved.complete();
+    final childResult = await tester.runAsync(() async {
+      await tester.tap(find.text(t.common.save));
+      final operation = editor.lastSave;
+      if (operation == null) throw TestFailure('Child Save tap did not start a node save');
+      return await operation;
     });
-    addTearDown(childSubscription.close);
-    await tester.tap(find.text(t.common.save));
-    await tester.runAsync(() => childSaved.future);
+    expect(childResult?.kind, NodeSaveKind.saved);
     await tester.pumpAndSettle();
     expect(find.byType(NodeEditorPage), findsNothing);
     expect(find.byType(ProfileDetailsPage), findsOneWidget);
@@ -173,14 +184,14 @@ void main() {
     await tester.ensureVisible(toggle);
     await tester.tap(toggle);
     await tester.pumpAndSettle();
-    final parentSaved = Completer<void>();
-    final parentSubscription = container.listen(details, (_, next) {
-      final data = next.asData?.value;
-      if (data != null && !data.isDetailsChanged && !parentSaved.isCompleted) parentSaved.complete();
+    final parentNotifier = container.read(details.notifier) as ObservedProfileDetailsNotifier;
+    final parentResult = await tester.runAsync(() async {
+      await tester.tap(find.text(t.common.save));
+      final operation = parentNotifier.lastSave;
+      if (operation == null) throw TestFailure('Parent Save tap did not start a details save');
+      return await operation;
     });
-    addTearDown(parentSubscription.close);
-    await tester.tap(find.text(t.common.save));
-    await tester.runAsync(() => parentSaved.future);
+    expect(parentResult, isTrue);
     await tester.pumpAndSettle();
     expect(await tester.runAsync(() => storage.paths.file(testProfileId).readAsString()), childBytes);
     final expected = originalConfig();

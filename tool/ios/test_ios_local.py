@@ -1,5 +1,6 @@
 """Make contract tests: only a fake Flutter executable runs, never build tools."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import local_export_options as export
@@ -38,15 +40,35 @@ class LocalBuildTests(unittest.TestCase):
         export.write_options(str(self.options), TEAM)
         self.log = self.root / "fake-flutter.jsonl"
         self.unexpected = self.root / "unexpected-command.txt"
+        self.attempt = self.root / ".ios-local-attempt"
+        self.entered = self.root / "fake-entered"
+        self.archive = self.root / "build/ios/archive/Runner.xcarchive/synthetic.txt"
+        self.ipa = self.root / "build/ios/ipa/synthetic.ipa"
         self.flutter = self.root / "bin/private flutter"
         self.flutter.write_text(
             "#!" + sys.executable + "\n"
-            "import json, os, pathlib, sys\n"
+            "import json, os, pathlib, sys, time\n"
             "config = pathlib.Path(os.environ['XCODE_XCCONFIG_FILE'])\n"
+            "attempt = pathlib.Path('.ios-local-attempt')\n"
             "row = {'argv': sys.argv[1:], 'config_path': str(config), 'config': config.read_text(), "
-            "'config_mode': config.stat().st_mode & 0o777, "
-            "'env': {k: os.environ[k] for k in ('HOME', 'PUB_CACHE', 'TMPDIR', 'FLUTTER_SUPPRESS_ANALYTICS')}}\n"
+            "'config_mode': config.stat().st_mode & 0o777, 'attempt_mode': attempt.stat().st_mode & 0o777, "
+            "'env': {k: os.environ[k] for k in ('HOME', 'PUB_CACHE', 'TMPDIR', 'XDG_CONFIG_HOME', 'FLUTTER_SUPPRESS_ANALYTICS')}}\n"
             "with open(os.environ['FAKE_LOG'], 'a') as stream: stream.write(json.dumps(row) + '\\n')\n"
+            "release = os.environ.get('FAKE_RELEASE')\n"
+            "deadline = time.monotonic() + 10\n"
+            "if release: pathlib.Path(os.environ['FAKE_ENTERED']).write_text('synthetic waiting\\n')\n"
+            "while release and not pathlib.Path(release).exists():\n"
+            "    if time.monotonic() >= deadline: raise SystemExit(96)\n"
+            "    time.sleep(0.01)\n"
+            "outputs = os.environ.get('FAKE_OUTPUTS', 'all')\n"
+            "if outputs != 'none':\n"
+            "    archive = pathlib.Path('build/ios/archive/Runner.xcarchive/synthetic.txt')\n"
+            "    archive.parent.mkdir(parents=True)\n"
+            "    archive.write_text('Synthetic retained archive, not an Xcode product.\\n')\n"
+            "if outputs == 'all':\n"
+            "    ipa = pathlib.Path('build/ios/ipa/synthetic.ipa')\n"
+            "    ipa.parent.mkdir(parents=True)\n"
+            "    ipa.write_text('Synthetic retained IPA, not an installable package.\\n')\n"
             "raise SystemExit(int(os.environ.get('FAKE_FLUTTER_EXIT', '0')))\n"
         )
         self.flutter.chmod(0o700)
@@ -74,19 +96,39 @@ class LocalBuildTests(unittest.TestCase):
                 environment.pop(key, None)
             else:
                 environment[key] = value
-        environment.update({"FAKE_LOG": str(self.log), "UNEXPECTED_COMMANDS": str(self.unexpected),
+        environment.update({"FAKE_LOG": str(self.log), "FAKE_ENTERED": str(self.entered),
+                            "UNEXPECTED_COMMANDS": str(self.unexpected),
                             "PATH": str(self.root / "bin") + os.pathsep + os.environ.get("PATH", "")})
         return subprocess.run(
             ["make", "--no-print-directory", *flags, "-f", str(REPO / "Makefile"), "-C", str(self.root), "ios-local", *assignments],
             env=environment, capture_output=True, text=True, timeout=20, check=False,
         )
 
-    def assert_blocked(self, result):
+    def assert_blocked(self, result, *, attempt_exists=False):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.log.exists(), result.stdout + result.stderr)
         self.assertFalse(self.unexpected.exists())
         self.assertEqual(self.core.read_bytes(), self.core_bytes)
         self.assertEqual(list((self.root / "tmp").iterdir()), [])
+        self.assertEqual(os.path.lexists(self.attempt), attempt_exists)
+
+    def assert_retry_preserves_attempt(self):
+        log = self.log.read_bytes()
+        outputs = {path: path.read_bytes() for path in (self.archive, self.ipa) if path.exists()}
+        attempt_inode = self.attempt.stat().st_ino
+        result = self.run_make({"IOS_LOCAL_BUILD_NUMBER": "60002"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.log.read_bytes(), log)
+        self.assertEqual({path: path.read_bytes() for path in (self.archive, self.ipa) if path.exists()}, outputs)
+        self.assertEqual(self.attempt.stat().st_ino, attempt_inode)
+        self.assertFalse(self.unexpected.exists())
+        self.assertEqual(list((self.root / "tmp").iterdir()), [])
+
+    def write_flutter_config(self, value, *, legacy=False):
+        path = self.root / "home" / (".flutter_settings" if legacy else ".config/flutter/settings")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        return path
 
     def test_release_driver_off_private_paths_and_shared_version_override(self):
         result = self.run_make(assignments=("CHANNEL=prod", "TARGET=lib/main_prod.dart", "BUILD_ARGS=--debug --dart-define=driver=true"))
@@ -101,7 +143,12 @@ class LocalBuildTests(unittest.TestCase):
         self.assertEqual(call["env"], {
             "HOME": self.values["IOS_LOCAL_HOME"], "PUB_CACHE": self.values["IOS_LOCAL_PUB_CACHE"],
             "TMPDIR": self.values["IOS_LOCAL_TMPDIR"], "FLUTTER_SUPPRESS_ANALYTICS": "true",
+            "XDG_CONFIG_HOME": str(self.root / "home/.config/flutter"),
         })
+        self.assertTrue(self.attempt.is_dir())
+        self.assertEqual(call["attempt_mode"], 0o700)
+        self.assertTrue(self.archive.is_file())
+        self.assertTrue(self.ipa.is_file())
         self.assertEqual(call["config"], "FLUTTER_BUILD_NUMBER = 60001\nCURRENT_PROJECT_VERSION = 60001\n")
         self.assertEqual(call["config_mode"], 0o600)
         self.assertEqual(Path(call["config_path"]).parent, self.root / "tmp")
@@ -164,7 +211,7 @@ class LocalBuildTests(unittest.TestCase):
         self.options.write_bytes(plistlib.dumps(unsafe))
         self.assert_blocked(self.run_make())
 
-    def test_flutter_failure_propagates_and_only_own_config_is_removed(self):
+    def test_flutter_failure_preserves_outputs_and_only_removes_own_config(self):
         result = self.run_make({"FAKE_FLUTTER_EXIT": "9"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Error 9", result.stderr)
@@ -172,7 +219,217 @@ class LocalBuildTests(unittest.TestCase):
         self.assertFalse(Path(call["config_path"]).exists())
         self.assertEqual(self.core.read_bytes(), self.core_bytes)
         self.assertTrue(self.options.exists())
+        self.assertTrue(self.archive.is_file())
+        self.assertTrue(self.ipa.is_file())
+        self.assertTrue(self.attempt.is_dir())
         self.assertFalse(self.unexpected.exists())
+        self.assert_retry_preserves_attempt()
+
+    def test_successful_attempt_blocks_normal_retry_with_another_build_number(self):
+        result = self.run_make()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_retry_preserves_attempt()
+
+    def test_preflight_failure_can_be_corrected_before_first_attempt(self):
+        self.assert_blocked(self.run_make({"IOS_LOCAL_BUILD_NUMBER": None}))
+        result = self.run_make()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_retry_preserves_attempt()
+
+    def test_failure_before_any_outputs_still_consumes_the_attempt(self):
+        result = self.run_make({"FAKE_FLUTTER_EXIT": "9", "FAKE_OUTPUTS": "none"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.attempt.is_dir())
+        self.assertFalse((self.root / "build").exists())
+        self.assert_retry_preserves_attempt()
+
+    def test_archive_only_zero_exit_still_retains_archive_and_attempt(self):
+        # Flutter 3.38.5 can return success after archive success/export failure.
+        # This fixture is not evidence of an IPA; a retry must still be blocked.
+        result = self.run_make({"FAKE_OUTPUTS": "archive"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archive.is_file())
+        self.assertFalse(self.ipa.exists())
+        self.assert_retry_preserves_attempt()
+
+    def test_concurrent_claim_is_blocked_before_first_attempt_writes_outputs(self):
+        release = self.root / "release-fake"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self.run_make, {"FAKE_RELEASE": str(release)})
+            try:
+                deadline = time.monotonic() + 5
+                while not self.entered.exists() and not future.done() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(self.entered.exists(), "fake Flutter did not reach the controlled wait")
+                self.assertFalse(future.done())
+                self.assertFalse((self.root / "build").exists())
+                second = self.run_make()
+                self.assertNotEqual(second.returncode, 0, second.stdout + second.stderr)
+                self.assertIn("workspace is already claimed or unavailable", second.stderr)
+                self.assertFalse(future.done())
+                self.assertEqual(len(self.log.read_text().splitlines()), 1)
+                self.assertFalse((self.root / "build").exists())
+            finally:
+                release.write_text("release synthetic process\n")
+                first = future.result(timeout=20)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assert_retry_preserves_attempt()
+
+    def test_existing_attempt_file_directory_and_links_are_never_removed(self):
+        target = self.root / "retained-marker-target"
+        target.write_bytes(b"retained target")
+        for kind in ("file", "directory", "link", "dangling-link"):
+            with self.subTest(kind=kind):
+                if kind == "directory":
+                    self.attempt.mkdir()
+                    (self.attempt / "retained.txt").write_bytes(b"retained claim")
+                elif kind == "file":
+                    self.attempt.write_bytes(b"retained claim")
+                else:
+                    self.attempt.symlink_to(target if kind == "link" else self.root / "absent-marker-target")
+                inode = self.attempt.lstat().st_ino
+                self.assert_blocked(self.run_make(), attempt_exists=True)
+                self.assertEqual(self.attempt.lstat().st_ino, inode)
+                if self.attempt.is_symlink():
+                    expected = target if kind == "link" else self.root / "absent-marker-target"
+                    self.assertEqual(os.readlink(self.attempt), str(expected))
+                    self.attempt.unlink()
+                elif kind == "directory":
+                    self.assertEqual((self.attempt / "retained.txt").read_bytes(), b"retained claim")
+                    (self.attempt / "retained.txt").unlink()
+                    self.attempt.rmdir()
+                else:
+                    self.assertEqual(self.attempt.read_bytes(), b"retained claim")
+                    self.attempt.unlink()
+                self.assertEqual(target.read_bytes(), b"retained target")
+
+    def test_existing_archive_and_ipa_file_directory_and_links_are_preserved(self):
+        target = self.root / "retained-output-target"
+        target.write_bytes(b"retained output target")
+        for relative in ("build/ios/archive", "build/ios/ipa"):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            for kind in ("file", "directory", "link", "dangling-link"):
+                with self.subTest(output=relative, kind=kind):
+                    if kind == "directory":
+                        path.mkdir()
+                        (path / "retained.txt").write_bytes(b"retained artifact")
+                    elif kind == "file":
+                        path.write_bytes(b"retained artifact")
+                    else:
+                        path.symlink_to(target if kind == "link" else self.root / "absent-output-target")
+                    inode = path.lstat().st_ino
+                    result = self.run_make()
+                    self.assert_blocked(result)
+                    self.assertIn("Preserving existing iOS output", result.stderr)
+                    self.assertEqual(path.lstat().st_ino, inode)
+                    if path.is_symlink():
+                        expected = target if kind == "link" else self.root / "absent-output-target"
+                        self.assertEqual(os.readlink(path), str(expected))
+                        path.unlink()
+                    elif kind == "directory":
+                        self.assertEqual((path / "retained.txt").read_bytes(), b"retained artifact")
+                        (path / "retained.txt").unlink()
+                        path.rmdir()
+                    else:
+                        self.assertEqual(path.read_bytes(), b"retained artifact")
+                        path.unlink()
+                    self.assertEqual(target.read_bytes(), b"retained output target")
+
+    def test_output_parent_files_and_links_are_rejected_before_traversal(self):
+        target = self.root / "retained-output-parent"
+        target.mkdir()
+        (target / "retained.txt").write_bytes(b"retained parent")
+        for relative in ("build", "build/ios"):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            for kind in ("file", "link", "dangling-link"):
+                with self.subTest(parent=relative, kind=kind):
+                    if kind == "file":
+                        path.write_bytes(b"retained parent file")
+                    else:
+                        path.symlink_to(target if kind == "link" else self.root / "absent-output-parent")
+                    inode = path.lstat().st_ino
+                    result = self.run_make()
+                    self.assert_blocked(result)
+                    self.assertIn("Refusing non-directory or linked output parent", result.stderr)
+                    self.assertEqual(path.lstat().st_ino, inode)
+                    if path.is_symlink():
+                        expected = target if kind == "link" else self.root / "absent-output-parent"
+                        self.assertEqual(os.readlink(path), str(expected))
+                    else:
+                        self.assertEqual(path.read_bytes(), b"retained parent file")
+                    path.unlink()
+                    self.assertEqual((target / "retained.txt").read_bytes(), b"retained parent")
+                    self.assertEqual(list(target.iterdir()), [target / "retained.txt"])
+
+    def test_configured_nondefault_build_directories_are_rejected_in_both_locations(self):
+        for legacy in (False, True):
+            for value in ("another-build", "../build", "build/", "./build", "", str(self.root / "other-build"), False, 7, ["build"]):
+                with self.subTest(legacy=legacy, value=value):
+                    path = self.write_flutter_config({"build-dir": value}, legacy=legacy)
+                    raw = path.read_bytes()
+                    result = self.run_make()
+                    self.assert_blocked(result)
+                    self.assertIn("requires default Flutter build-dir", result.stderr)
+                    self.assertEqual(path.read_bytes(), raw)
+                    path.unlink()
+
+    def test_malformed_flutter_configuration_is_not_deleted_or_repaired(self):
+        for legacy in (False, True):
+            path = self.write_flutter_config({}, legacy=legacy)
+            for raw in ("{", "[]", "null", "NaN", '{"build-dir": NaN}'):
+                with self.subTest(legacy=legacy, raw=raw):
+                    path.write_text(raw)
+                    self.assert_blocked(self.run_make())
+                    self.assertEqual(path.read_text(), raw)
+            path.unlink()
+
+    def test_configuration_links_are_rejected_without_following_fixture_targets(self):
+        target = self.root / "retained-config-target"
+        target.write_bytes(b"retained configuration")
+        for relative in ("home/.flutter_settings", "home/.config", "home/.config/flutter", "home/.config/flutter/settings"):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            for dangling in (False, True):
+                with self.subTest(path=relative, dangling=dangling):
+                    destination = self.root / "absent-config-target" if dangling else target
+                    path.symlink_to(destination)
+                    result = self.run_make()
+                    self.assert_blocked(result)
+                    self.assertIn("regular private configuration paths", result.stderr)
+                    self.assertEqual(os.readlink(path), str(destination))
+                    path.unlink()
+                    self.assertEqual(target.read_bytes(), b"retained configuration")
+
+    def test_null_build_dir_and_existing_empty_output_parents_use_default(self):
+        self.write_flutter_config({"build-dir": None})
+        (self.root / "build/ios").mkdir(parents=True)
+        result = self.run_make()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archive.is_file())
+        self.assertTrue(self.ipa.is_file())
+
+    def test_legacy_settings_take_precedence_over_private_xdg_settings(self):
+        self.write_flutter_config({"build-dir": "unused-alternate-build"})
+        self.write_flutter_config({"build-dir": "build"}, legacy=True)
+        result = self.run_make()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.archive.is_file())
+        self.assertFalse((self.root / "unused-alternate-build").exists())
+
+    def test_inherited_xdg_cannot_redirect_the_actual_output_directory(self):
+        inherited = self.root / "inherited-config"
+        inherited.mkdir()
+        settings = inherited / "settings"
+        settings.write_text('{"build-dir": "inherited-build"}')
+        original = settings.read_bytes()
+        result = self.run_make({"XDG_CONFIG_HOME": str(inherited)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = json.loads(self.log.read_text())
+        self.assertEqual(call["env"]["XDG_CONFIG_HOME"], str(self.root / "home/.config/flutter"))
+        self.assertEqual(settings.read_bytes(), original)
+        self.assertFalse((self.root / "inherited-build").exists())
 
     def test_make_dry_run_does_not_run_flutter_or_preparation(self):
         result = self.run_make(flags=("-n",))
@@ -182,6 +439,8 @@ class LocalBuildTests(unittest.TestCase):
             self.assertNotIn(forbidden, result.stdout)
         self.assertFalse(self.log.exists())
         self.assertFalse(self.unexpected.exists())
+        self.assertFalse(os.path.lexists(self.attempt))
+        self.assertFalse((self.root / "build").exists())
 
 
 class WorkflowContractTests(unittest.TestCase):

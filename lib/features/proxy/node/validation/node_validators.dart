@@ -7,9 +7,7 @@ import 'package:hiddify/utils/validators.dart';
 /// Each function returns `true` when valid. UI layers map failures to
 /// translated messages; see `errors.nodes.*` keys.
 abstract final class NodeValidators {
-  static final _uuidRegex = RegExp(
-    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-  );
+  static final _uuidRegex = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
 
   static final _hexEvenRegex = RegExp(r'^([0-9a-fA-F]{2})*$');
 
@@ -73,11 +71,7 @@ abstract final class NodeValidators {
   /// to the method's key length (16/32 bytes). Other methods accept any
   /// non-empty password.
   static bool isShadowsocksKey(String method, String password) {
-    const keyed = {
-      '2022-blake3-aes-128-gcm': 16,
-      '2022-blake3-aes-256-gcm': 32,
-      '2022-blake3-chacha20-poly1305': 32,
-    };
+    const keyed = {'2022-blake3-aes-128-gcm': 16, '2022-blake3-aes-256-gcm': 32, '2022-blake3-chacha20-poly1305': 32};
     final want = keyed[method];
     if (want == null) return password.isNotEmpty;
     if (password.isEmpty) return false;
@@ -107,12 +101,16 @@ abstract final class NodeValidators {
     return n != null && n >= 0;
   }
 
-  /// Positive number for bandwidths.
+  /// The 64-bit core multiplies integer Mbps by 125000 before converting to
+  /// uint64. Bound the input so that signed Go int multiplication cannot wrap.
+  static const maxBandwidthMbps = 0x7fffffffffffffff ~/ 125000;
+
+  /// Positive decimal integer for Hysteria2 bandwidths. Keep the existing
+  /// entry point for the editor's validation call; fractions must not reach
+  /// Go's integer up_mbps/down_mbps options, even as integral doubles.
   static bool isPositiveNumber(String input) {
-    final v = input.trim();
-    if (v.isEmpty) return false;
-    final n = double.tryParse(v);
-    return n != null && n > 0;
+    final n = int.tryParse(input.trim(), radix: 10);
+    return n != null && n > 0 && n <= maxBandwidthMbps;
   }
 
   /// ALPN list: comma or space separated tokens, each non-empty.

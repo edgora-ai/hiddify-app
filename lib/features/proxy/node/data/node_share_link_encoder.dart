@@ -6,7 +6,7 @@ import 'package:hiddify/features/proxy/node/data/node_json_adapter.dart';
 ///
 /// [link] is null when [blockedReason] is set: the outbound cannot be
 /// faithfully represented (e.g. it depends on a detour). [warnings] lists
-/// dropped settings the user should know about; [droppedFields] the raw keys.
+/// dropped settings the user should know about; [droppedFields] the field paths.
 class NodeShareOutcome {
   const NodeShareOutcome({this.link, this.blockedReason, this.warnings = const [], this.droppedFields = const []});
 
@@ -31,11 +31,52 @@ abstract final class NodeShareLinkEncoder {
   static const blockedUnsupportedObfs = 'unsupportedObfs';
   static const blockedUnsupportedProtocol = 'unsupportedProtocol';
   static const blockedMissingField = 'missingField';
+  static const blockedTlsNotShareable = 'tlsNotShareable';
 
   static const _shareableTransports = {'tcp', 'ws', 'grpc', 'httpupgrade'};
 
-  /// Fields that never survive a share link; reported as warnings.
-  static const _droppedDialKeys = {'dial_timeout', 'tcp_fast_open', 'tcp_multi_path', 'udp_fragment'};
+  // option.OutboundTLSOptions in the bundled core. None of these constraints
+  // is emitted by this encoder. In particular, a certificate pin is still
+  // enforced by the core when insecure=true; dropping it would disable auth.
+  static const _tlsAuthConstraints = {
+    'certificate',
+    'certificate_path',
+    'certificate_sha256',
+    'certificate_public_key_sha256',
+    'client_certificate',
+    'client_certificate_path',
+    'client_key',
+    'client_key_path',
+    'min_version',
+    'max_version',
+    'cipher_suites',
+    'curve_preferences',
+  };
+
+  // Known zero values do not constrain a handshake. Do not apply this rule to
+  // unknown fields: even an unknown false/empty value must be reported.
+  static const _tlsDefaultFields = {
+    ..._tlsAuthConstraints,
+    'engine',
+    'disable_sni',
+    'fragment',
+    'fragment_fallback_delay',
+    'record_fragment',
+    'spoof',
+    'spoof_method',
+    'kernel_tx',
+    'kernel_rx',
+    'handshake_timeout',
+  };
+
+  static const _protocolShareFields = {
+    'vmess': {'uuid', 'alter_id', 'security'},
+    'vless': {'uuid', 'flow'},
+    'trojan': {'password'},
+    'shadowsocks': {'method', 'password', 'plugin', 'plugin_opts'},
+    'tuic': {'uuid', 'password', 'congestion_control', 'udp_relay_mode'},
+    'hysteria2': {'password', 'obfs.type', 'obfs.password'},
+  };
 
   static NodeShareOutcome encode(Map<String, dynamic> outbound) {
     final type = outbound['type'];
@@ -56,7 +97,13 @@ abstract final class NodeShareLinkEncoder {
 
     final warnings = <String>[];
     final dropped = <String>[];
-    _collectCommonDropped(outbound, warnings, dropped);
+    _collectDropped(outbound, type, warnings, dropped);
+    if (_losesTlsAuthentication(outbound)) {
+      return NodeShareOutcome(blockedReason: blockedTlsNotShareable, warnings: warnings, droppedFields: dropped);
+    }
+    if (type != 'vless' && NodeJson.tlsModeOf(outbound) == 'reality') {
+      return NodeShareOutcome(blockedReason: blockedRealityNotShareable, warnings: warnings, droppedFields: dropped);
+    }
 
     switch (type) {
       case 'vmess':
@@ -78,24 +125,123 @@ abstract final class NodeShareLinkEncoder {
 
   // ------------------------------------------------------------------ common
 
-  static void _collectCommonDropped(
-    Map<String, dynamic> outbound,
+  static bool _hasConfiguredValue(dynamic value) => switch (value) {
+    null || false => false,
+    String s => s.isNotEmpty,
+    List list => list.isNotEmpty,
+    Map map => map.isNotEmpty,
+    num n => n != 0,
+    _ => true,
+  };
+
+  static bool _losesTlsAuthentication(Map<String, dynamic> outbound) {
+    final tls = outbound['tls'];
+    if (tls is! Map<String, dynamic>) return false;
+    if (_tlsAuthConstraints.any((key) => _hasConfiguredValue(tls[key]))) return true;
+    final ech = tls['ech'];
+    // Removing ECH must not silently fall back to an unprotected ClientHello.
+    return ech is Map<String, dynamic> && ech['enabled'] == true;
+  }
+
+  /// Audit the whole outbound, not just a short blacklist of dialer fields.
+  /// Paths are field names only: never put credential/certificate values in an
+  /// outcome. Represented containers are traversed so future nested options do
+  /// not inherit the support status of their parent (tls, utls, transport, ...).
+  static void _collectDropped(Map<String, dynamic> outbound, String type, List<String> warnings, List<String> dropped) {
+    final represented = <String>{
+      'type',
+      'tag',
+      'server',
+      'server_port',
+      ...(_protocolShareFields[type] ?? const <String>{}),
+    };
+    if (type == 'shadowsocks') {
+      if (!_hasConfiguredValue(outbound['plugin'])) represented.remove('plugin_opts');
+    } else if (_protocolShareFields.containsKey(type)) {
+      represented.addAll({'tls.enabled', 'tls.server_name'});
+      if (type != 'hysteria2') represented.add('tls.alpn');
+      // The VMess JSON convention has no verified portable insecure mapping.
+      // Keep its existing link shape, but explicitly report insecure=true.
+      if (type != 'vmess' || NodeJson.getPath(outbound, ['tls', 'insecure']) == false) {
+        represented.add('tls.insecure');
+      }
+      if (type == 'vmess' || type == 'vless' || type == 'trojan') {
+        represented.add('tls.utls.fingerprint');
+        if (NodeJson.getPath(outbound, ['tls', 'utls', 'enabled']) == true && _hasConfiguredValue(_fpOf(outbound))) {
+          represented.add('tls.utls.enabled');
+        }
+        final transport = outbound['transport'];
+        represented.add('transport.type');
+        switch (NodeJson.transportTypeOf(outbound)) {
+          case 'ws':
+            represented.add('transport.path');
+            if (transport is Map<String, dynamic>) {
+              final headers = transport['headers'];
+              if (headers is Map<String, dynamic>) {
+                for (final key in headers.keys) {
+                  if (key.toLowerCase() == 'host') represented.add('transport.headers.$key');
+                }
+              }
+            }
+          case 'grpc':
+            represented.add('transport.service_name');
+          case 'httpupgrade':
+            represented.addAll({'transport.host', 'transport.path'});
+        }
+        // ray2sing/common.go forces this ALPN list for these transports.
+        if ({'ws', 'grpc', 'httpupgrade'}.contains(NodeJson.transportTypeOf(outbound)) &&
+            _alpnParam(outbound).isNotEmpty &&
+            _alpnParam(outbound) != 'h2,http/1.1') {
+          represented.remove('tls.alpn');
+        }
+      }
+      if (type == 'vless' && NodeJson.tlsModeOf(outbound) == 'reality') {
+        represented.addAll({'tls.reality.enabled', 'tls.reality.public_key', 'tls.reality.short_id'});
+      }
+    }
+    _collectFieldLosses(outbound, '', represented, warnings, dropped);
+  }
+
+  static bool _isTlsDefault(String path, dynamic value) {
+    if (path.startsWith('tls.') && _tlsDefaultFields.contains(path.substring(4))) {
+      return !_hasConfiguredValue(value);
+    }
+    if (path == 'tls.utls.enabled' || path == 'tls.reality.enabled' || path == 'tls.ech.enabled') {
+      return value == false;
+    }
+    return false;
+  }
+
+  static void _collectFieldLosses(
+    dynamic value,
+    String path,
+    Set<String> represented,
     List<String> warnings,
     List<String> dropped,
   ) {
-    if (outbound['multiplex'] is Map) {
-      dropped.add('multiplex');
-      warnings.add('multiplex');
+    if (represented.contains(path) || _isTlsDefault(path, value)) return;
+    // Retain the existing aggregate warning for a wholly omitted multiplex.
+    if (path == 'multiplex' && value is Map && value.isNotEmpty) {
+      warnings.add(path);
+      dropped.add(path);
     }
-    if (outbound['packet_encoding'] != null) {
-      dropped.add('packet_encoding');
-      warnings.add('packet_encoding');
-    }
-    for (final k in _droppedDialKeys) {
-      if (outbound[k] != null) {
-        dropped.add(k);
-        warnings.add(k);
+    if (value is Map<String, dynamic> && value.isNotEmpty) {
+      for (final entry in value.entries) {
+        _collectFieldLosses(
+          entry.value,
+          path.isEmpty ? entry.key : '$path.${entry.key}',
+          represented,
+          warnings,
+          dropped,
+        );
       }
+    } else if (value is List && value.any((element) => element is Map || element is List)) {
+      for (var i = 0; i < value.length; i++) {
+        _collectFieldLosses(value[i], '$path[$i]', represented, warnings, dropped);
+      }
+    } else if (path.isNotEmpty && !represented.any((field) => field.startsWith('$path.'))) {
+      warnings.add(path);
+      dropped.add(path);
     }
   }
 
@@ -110,14 +256,14 @@ abstract final class NodeShareLinkEncoder {
     return parts.join('&');
   }
 
-  static String _alpnParam(Map<String, dynamic> outbound) => NodeJson.asStringList(NodeJson.getPath(outbound, [
-    'tls',
-    'alpn',
-  ])).join(',');
+  static String _alpnParam(Map<String, dynamic> outbound) =>
+      NodeJson.asStringList(NodeJson.getPath(outbound, ['tls', 'alpn'])).join(',');
 
-  static String? _sniOf(Map<String, dynamic> outbound) => NodeJson.asString(NodeJson.getPath(outbound, ['tls', 'server_name']));
+  static String? _sniOf(Map<String, dynamic> outbound) =>
+      NodeJson.asString(NodeJson.getPath(outbound, ['tls', 'server_name']));
 
-  static String? _fpOf(Map<String, dynamic> outbound) => NodeJson.asString(NodeJson.getPath(outbound, ['tls', 'utls', 'fingerprint']));
+  static String? _fpOf(Map<String, dynamic> outbound) =>
+      NodeJson.asString(NodeJson.getPath(outbound, ['tls', 'utls', 'fingerprint']));
 
   static bool _insecureOf(Map<String, dynamic> outbound) => NodeJson.getPath(outbound, ['tls', 'insecure']) == true;
 
@@ -206,12 +352,6 @@ abstract final class NodeShareLinkEncoder {
       'alpn': _alpnParam(outbound),
       'fp': _fpOf(outbound) ?? '',
     };
-    for (final k in ['global_padding', 'authenticated_length']) {
-      if (outbound[k] != null) {
-        dropped.add(k);
-        warnings.add(k);
-      }
-    }
     final link = 'vmess://${base64.encode(utf8.encode(jsonEncode(json)))}';
     return NodeShareOutcome(link: link, warnings: warnings, droppedFields: dropped);
   }
@@ -310,10 +450,6 @@ abstract final class NodeShareLinkEncoder {
     if (method == null || method.isEmpty || password == null || password.isEmpty) {
       return const NodeShareOutcome(blockedReason: blockedMissingField);
     }
-    if (outbound['udp_over_tcp'] == true) {
-      dropped.add('udp_over_tcp');
-      warnings.add('udp_over_tcp');
-    }
 
     String userinfo;
     if (method.startsWith('2022-blake3-')) {
@@ -348,12 +484,6 @@ abstract final class NodeShareLinkEncoder {
     final password = NodeJson.asString(outbound['password']);
     if (uuid == null || uuid.isEmpty || password == null || password.isEmpty) {
       return const NodeShareOutcome(blockedReason: blockedMissingField);
-    }
-    for (final k in ['udp_over_stream', 'zero_rtt_handshake', 'heartbeat']) {
-      if (outbound[k] != null) {
-        dropped.add(k);
-        warnings.add(k);
-      }
     }
     final params = <String, String>{
       'congestion_control': NodeJson.asString(outbound['congestion_control']) ?? '',
@@ -393,12 +523,6 @@ abstract final class NodeShareLinkEncoder {
       if (obfsType == 'salamander') {
         params['obfs'] = 'salamander';
         params['obfs-password'] = NodeJson.asString(obfs['password']) ?? '';
-      }
-    }
-    for (final k in ['up_mbps', 'down_mbps']) {
-      if (outbound[k] != null) {
-        dropped.add(k);
-        warnings.add(k);
       }
     }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/features/proxy/node/data/node_json_adapter.dart';
 import 'package:hiddify/features/proxy/node/model/node_editor_state.dart';
@@ -24,6 +25,7 @@ class VmessFields extends HookConsumerWidget {
     final draft = data.draft;
     final errors = data.fieldErrors;
     final security = NodeJson.asString(draft['security']) ?? 'auto';
+    final uuidRevision = useState(0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -33,6 +35,7 @@ class VmessFields extends HookConsumerWidget {
           child: NodePasswordField(
             label: t.pages.nodeEditor.fields.uuid,
             initialValue: NodeJson.asString(draft['uuid']) ?? '',
+            initialValueRevision: uuidRevision.value,
             validator: (_) => errors['uuid'],
             onChanged: (v) => notifier.setPath(['uuid'], v.trim()),
           ),
@@ -43,10 +46,8 @@ class VmessFields extends HookConsumerWidget {
               Expanded(
                 child: NodeDropdownField<String>(
                   label: t.pages.nodeEditor.fields.encryption,
-                  value: nodeVmessSecurities.contains(security) ? security : 'auto',
-                  items: [
-                    for (final s in nodeVmessSecurities) DropdownMenuItem(value: s, child: Text(s)),
-                  ],
+                  value: security,
+                  items: [for (final s in nodeVmessSecurities) DropdownMenuItem(value: s, child: Text(s))],
                   onChanged: (v) {
                     if (v != null) notifier.setPath(['security'], v);
                   },
@@ -73,7 +74,10 @@ class VmessFields extends HookConsumerWidget {
           child: OutlinedButton.icon(
             icon: const Icon(Icons.refresh_rounded),
             label: Text(t.pages.nodeEditor.actions.generateUuid),
-            onPressed: () => notifier.setPath(['uuid'], const Uuid().v4()),
+            onPressed: () {
+              notifier.setPath(['uuid'], const Uuid().v4());
+              uuidRevision.value++;
+            },
           ),
         ),
       ],

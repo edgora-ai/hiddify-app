@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/features/proxy/node/data/node_json_adapter.dart';
 import 'package:hiddify/features/proxy/node/model/node_editor_state.dart';
@@ -23,6 +24,7 @@ class VlessFields extends HookConsumerWidget {
     final errors = data.fieldErrors;
     final flow = NodeJson.asString(draft['flow']) ?? '';
     final packetEncoding = NodeJson.asString(draft['packet_encoding']) ?? '';
+    final uuidRevision = useState(0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -32,6 +34,7 @@ class VlessFields extends HookConsumerWidget {
           child: NodePasswordField(
             label: t.pages.nodeEditor.fields.uuid,
             initialValue: NodeJson.asString(draft['uuid']) ?? '',
+            initialValueRevision: uuidRevision.value,
             validator: (_) => errors['uuid'],
             onChanged: (v) => notifier.setPath(['uuid'], v.trim()),
           ),
@@ -40,15 +43,13 @@ class VlessFields extends HookConsumerWidget {
           children: [
             NodeDropdownField<String>(
               label: t.pages.nodeEditor.fields.flow,
-              value: nodeVlessFlows.contains(flow) ? flow : '',
-              items: [
-                for (final f in nodeVlessFlows) DropdownMenuItem(value: f, child: Text(f.isEmpty ? '-' : f)),
-              ],
+              value: flow,
+              items: [for (final f in nodeVlessFlows) DropdownMenuItem(value: f, child: Text(f.isEmpty ? '-' : f))],
               onChanged: (v) => notifier.setPath(['flow'], (v == null || v.isEmpty) ? null : v),
             ),
             NodeDropdownField<String>(
               label: t.pages.nodeEditor.fields.packetEncoding,
-              value: nodePacketEncodings.contains(packetEncoding) ? packetEncoding : '',
+              value: packetEncoding,
               items: [
                 for (final p in nodePacketEncodings) DropdownMenuItem(value: p, child: Text(p.isEmpty ? '-' : p)),
               ],
@@ -64,7 +65,10 @@ class VlessFields extends HookConsumerWidget {
           child: OutlinedButton.icon(
             icon: const Icon(Icons.refresh_rounded),
             label: Text(t.pages.nodeEditor.actions.generateUuid),
-            onPressed: () => notifier.setPath(['uuid'], const Uuid().v4()),
+            onPressed: () {
+              notifier.setPath(['uuid'], const Uuid().v4());
+              uuidRevision.value++;
+            },
           ),
         ),
       ],

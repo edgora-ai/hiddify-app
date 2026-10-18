@@ -75,10 +75,7 @@ void main() {
       expect(NodeValidators.isShadowsocksKey('2022-blake3-aes-128-gcm', 'AAAAAAAAAAAAAAAAAAAAAA=='), isTrue);
       // 32 zero bytes -> base64.
       expect(
-        NodeValidators.isShadowsocksKey(
-          '2022-blake3-aes-256-gcm',
-          'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-        ),
+        NodeValidators.isShadowsocksKey('2022-blake3-aes-256-gcm', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
         isTrue,
       );
       expect(NodeValidators.isShadowsocksKey('2022-blake3-aes-128-gcm', 'short'), isFalse);
@@ -102,6 +99,32 @@ void main() {
       expect(NodeValidators.isPositiveNumber('100'), isTrue);
       expect(NodeValidators.isPositiveNumber('0'), isFalse);
       expect(NodeValidators.isPositiveNumber('-5'), isFalse);
+    });
+  });
+
+  group('Hysteria2 integer bandwidth', () {
+    test('accepts positive decimal integers through the core-safe limit', () {
+      for (final value in ['1', '100', ' 200 ', NodeValidators.maxBandwidthMbps.toString()]) {
+        expect(NodeValidators.isPositiveNumber(value), isTrue, reason: value);
+      }
+    });
+
+    test('rejects fractions, non-decimal input and non-finite values', () {
+      for (final value in ['', ' ', '100.5', '100.0', '.5', '1e2', '0x64', 'NaN', 'Infinity', 'abc']) {
+        expect(NodeValidators.isPositiveNumber(value), isFalse, reason: value);
+      }
+    });
+
+    test('rejects zero, negatives, conversion overflow and integer overflow', () {
+      for (final value in [
+        '0',
+        '-1',
+        (NodeValidators.maxBandwidthMbps + 1).toString(),
+        '9223372036854775807',
+        '9223372036854775808',
+      ]) {
+        expect(NodeValidators.isPositiveNumber(value), isFalse, reason: value);
+      }
     });
   });
 
@@ -131,10 +154,7 @@ void main() {
         NodeValidators.vlessCombinationError(flow: 'xtls-rprx-vision', transport: 'tcp', multiplex: true),
         'visionNoMultiplex',
       );
-      expect(
-        NodeValidators.vlessCombinationError(flow: 'bogus', transport: 'tcp', multiplex: false),
-        'unknownFlow',
-      );
+      expect(NodeValidators.vlessCombinationError(flow: 'bogus', transport: 'tcp', multiplex: false), 'unknownFlow');
     });
   });
 }

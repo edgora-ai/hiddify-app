@@ -91,7 +91,41 @@ void main() {
     test('missing transport reads as tcp', () {
       expect(NodeJson.transportTypeOf({'type': 'vmess'}), 'tcp');
       expect(NodeJson.transportTypeOf({'transport': 'bogus'}), 'tcp');
-      expect(NodeJson.transportTypeOf({'transport': {'type': 'ws'}}), 'ws');
+      expect(
+        NodeJson.transportTypeOf({
+          'transport': {'type': 'ws'},
+        }),
+        'ws',
+      );
+    });
+
+    test('unknown form transports survive unrelated edits and JSON round-trip', () {
+      for (final protocol in ['vmess', 'vless', 'trojan']) {
+        for (final type in ['http', 'quic']) {
+          final original = <String, dynamic>{
+            'type': protocol,
+            'tag': 'original',
+            'server': 'node.example.com',
+            'server_port': 443,
+            'transport': {
+              'type': type,
+              if (type == 'http') 'host': ['transport.example.com'],
+              if (type == 'http') 'path': '/tunnel',
+              'custom': {
+                'nested': [1, 'keep'],
+              },
+            },
+            'custom_outbound': {'keep': true},
+          };
+          final draft = NodeJson.deepCopyMap(original);
+          expect(NodeJson.transportTypeOf(draft), type);
+          NodeJson.putPath(draft, ['server_port'], 8443);
+          final decoded = NodeJson.deepCopyMap(draft);
+          expect(decoded['transport'], original['transport']);
+          expect(decoded['custom_outbound'], original['custom_outbound']);
+          expect(original['server_port'], 443);
+        }
+      }
     });
 
     test('tcp selection removes transport object', () {
@@ -116,10 +150,36 @@ void main() {
   group('tls mode mapping', () {
     test('reads none/tls/reality', () {
       expect(NodeJson.tlsModeOf({}), 'none');
-      expect(NodeJson.tlsModeOf({'tls': {'enabled': false}}), 'none');
-      expect(NodeJson.tlsModeOf({'tls': {'enabled': true}}), 'tls');
-      expect(NodeJson.tlsModeOf({'tls': {'enabled': true, 'reality': {'enabled': true}}}), 'reality');
-      expect(NodeJson.tlsModeOf({'tls': {'enabled': true, 'reality': {'enabled': false}}}), 'tls');
+      expect(
+        NodeJson.tlsModeOf({
+          'tls': {'enabled': false},
+        }),
+        'none',
+      );
+      expect(
+        NodeJson.tlsModeOf({
+          'tls': {'enabled': true},
+        }),
+        'tls',
+      );
+      expect(
+        NodeJson.tlsModeOf({
+          'tls': {
+            'enabled': true,
+            'reality': {'enabled': true},
+          },
+        }),
+        'reality',
+      );
+      expect(
+        NodeJson.tlsModeOf({
+          'tls': {
+            'enabled': true,
+            'reality': {'enabled': false},
+          },
+        }),
+        'tls',
+      );
     });
 
     test('applies modes, preserves unknown siblings', () {
@@ -155,6 +215,36 @@ void main() {
       expect(h, {'Host': 'a.com'});
       NodeJson.putHeader(h, 'host', '');
       expect(h, isEmpty);
+    });
+  });
+
+  group('optionalIntInput', () {
+    test('integer bandwidth survives a JSON round-trip as an int', () {
+      final draft = <String, dynamic>{'type': 'hysteria2'};
+      NodeJson.putPath(draft, ['up_mbps'], NodeJson.optionalIntInput('100'));
+      NodeJson.putPath(draft, ['down_mbps'], NodeJson.optionalIntInput(' 200 '));
+      final decoded = NodeJson.deepCopyMap(draft);
+      expect(decoded['up_mbps'], isA<int>());
+      expect(decoded['up_mbps'], 100);
+      expect(decoded['down_mbps'], isA<int>());
+      expect(decoded['down_mbps'], 200);
+    });
+
+    test('blank input removes a bandwidth but keeps other settings', () {
+      final draft = <String, dynamic>{'up_mbps': 100, 'down_mbps': 200, 'custom': 'keep'};
+      NodeJson.putPath(draft, ['up_mbps'], NodeJson.optionalIntInput('  '));
+      NodeJson.putPath(draft, ['down_mbps'], NodeJson.optionalIntInput(''));
+      expect(NodeJson.deepCopyMap(draft), {'custom': 'keep'});
+    });
+
+    test('malformed non-empty input is not truncated or removed', () {
+      for (final input in ['100.5', '100.0', '1e2', '0x64', 'NaN', 'Infinity', 'abc', '9223372036854775808']) {
+        final draft = <String, dynamic>{};
+        NodeJson.putPath(draft, ['up_mbps'], NodeJson.optionalIntInput(input));
+        final decoded = NodeJson.deepCopyMap(draft);
+        expect(decoded.containsKey('up_mbps'), isTrue, reason: input);
+        expect(decoded['up_mbps'], input, reason: input);
+      }
     });
   });
 

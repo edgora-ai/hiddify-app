@@ -32,9 +32,7 @@ class NodeTlsFields extends HookConsumerWidget {
     final notifier = ref.read(nodeEditorNotifierProvider(profileId, rawTag).notifier);
     final draft = data.draft;
     final errors = data.fieldErrors;
-    var mode = NodeJson.tlsModeOf(draft);
-    if (tlsRequired && mode == 'none') mode = 'tls';
-    if (mode == 'reality' && !allowReality) mode = 'tls';
+    final mode = NodeJson.tlsModeOf(draft);
 
     final modes = [if (!tlsRequired) 'none', 'tls', if (allowReality) 'reality'];
     String modeLabel(String m) => switch (m) {
@@ -59,6 +57,7 @@ class NodeTlsFields extends HookConsumerWidget {
           child: NodeDropdownField<String>(
             label: t.pages.nodeEditor.fields.tlsMode,
             value: mode,
+            helperText: modes.contains(mode) ? null : t.pages.nodeEditor.help.unsupportedFieldsPreserved,
             items: [for (final m in modes) DropdownMenuItem(value: m, child: Text(modeLabel(m)))],
             onChanged: (v) {
               if (v == null) return;
@@ -66,12 +65,13 @@ class NodeTlsFields extends HookConsumerWidget {
             },
           ),
         ),
-        if (mode != 'none') ...[
+        if (modes.contains(mode) && mode != 'none') ...[
           NodeFieldPadding(
             child: CustomTextFormField(
               label: t.pages.nodeEditor.fields.serverName,
               hint: 'SNI',
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['tls', 'server_name'])) ?? '',
+              initialValueRevision: (draft['type'], mode),
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,
@@ -83,6 +83,7 @@ class NodeTlsFields extends HookConsumerWidget {
               label: t.pages.nodeEditor.fields.alpn,
               hint: 'h2, http/1.1',
               initialValue: alpn,
+              initialValueRevision: (draft['type'], mode),
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,
@@ -95,7 +96,7 @@ class NodeTlsFields extends HookConsumerWidget {
           NodeFieldPadding(
             child: NodeDropdownField<String>(
               label: t.pages.nodeEditor.fields.fingerprint,
-              value: nodeUtlsFingerprints.contains(fp) ? fp : '',
+              value: fp,
               items: [
                 const DropdownMenuItem(value: '', child: Text('-')),
                 for (final f in nodeUtlsFingerprints) DropdownMenuItem(value: f, child: Text(f)),
@@ -120,11 +121,12 @@ class NodeTlsFields extends HookConsumerWidget {
             ),
           ),
         ],
-        if (mode == 'reality') ...[
+        if (mode == 'reality' && allowReality) ...[
           NodeFieldPadding(
             child: NodePasswordField(
               label: t.pages.nodeEditor.fields.realityPublicKey,
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['tls', 'reality', 'public_key'])) ?? '',
+              initialValueRevision: draft['type'],
               validator: (_) => errors['reality.public_key'],
               onChanged: (v) => notifier.setPath(['tls', 'reality', 'public_key'], v.trim()),
             ),
@@ -133,6 +135,7 @@ class NodeTlsFields extends HookConsumerWidget {
             child: CustomTextFormField(
               label: t.pages.nodeEditor.fields.realityShortId,
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['tls', 'reality', 'short_id'])) ?? '',
+              initialValueRevision: draft['type'],
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,

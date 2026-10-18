@@ -25,7 +25,7 @@ class NodeTransportFields extends HookConsumerWidget {
     final current = NodeJson.transportTypeOf(draft);
 
     Future<void> switchTransport(String next) async {
-      if (next == current) return;
+      if (!nodeTransportTypes.contains(current) || !nodeTransportTypes.contains(next) || next == current) return;
       // Switching transports drops the old transport's settings; confirm
       // first whenever a configured non-tcp transport exists.
       if (current != 'tcp' && draft['transport'] is Map) {
@@ -60,9 +60,10 @@ class NodeTransportFields extends HookConsumerWidget {
           child: NodeDropdownField<String>(
             label: t.pages.nodeEditor.fields.transport,
             value: current,
-            items: [
-              for (final tr in nodeTransportTypes) DropdownMenuItem(value: tr, child: Text(tr)),
-            ],
+            helperText: nodeTransportTypes.contains(current)
+                ? null
+                : t.pages.nodeEditor.help.unsupportedFieldsPreserved,
+            items: [for (final tr in nodeTransportTypes) DropdownMenuItem(value: tr, child: Text(tr))],
             onChanged: (v) {
               if (v != null) switchTransport(v);
             },
@@ -74,6 +75,7 @@ class NodeTransportFields extends HookConsumerWidget {
               label: t.pages.nodeEditor.fields.path,
               hint: '/ws',
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['transport', 'path'])) ?? '',
+              initialValueRevision: current,
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,
@@ -84,6 +86,7 @@ class NodeTransportFields extends HookConsumerWidget {
             child: CustomTextFormField(
               label: t.pages.nodeEditor.fields.hostHeader,
               initialValue: headerHost(),
+              initialValueRevision: current,
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,
@@ -102,6 +105,7 @@ class NodeTransportFields extends HookConsumerWidget {
             child: CustomTextFormField(
               label: t.pages.nodeEditor.fields.serviceName,
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['transport', 'service_name'])) ?? '',
+              initialValueRevision: current,
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,
@@ -113,6 +117,7 @@ class NodeTransportFields extends HookConsumerWidget {
             child: CustomTextFormField(
               label: t.pages.nodeEditor.fields.hostHeader,
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['transport', 'host'])) ?? '',
+              initialValueRevision: current,
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,
@@ -123,6 +128,7 @@ class NodeTransportFields extends HookConsumerWidget {
             child: CustomTextFormField(
               label: t.pages.nodeEditor.fields.path,
               initialValue: NodeJson.asString(NodeJson.getPath(draft, ['transport', 'path'])) ?? '',
+              initialValueRevision: current,
               maxLines: 1,
               textCapitalization: TextCapitalization.none,
               enableSuggestions: false,

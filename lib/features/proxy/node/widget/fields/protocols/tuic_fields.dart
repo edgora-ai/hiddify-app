@@ -48,20 +48,16 @@ class TuicFields extends HookConsumerWidget {
           children: [
             NodeDropdownField<String>(
               label: t.pages.nodeEditor.fields.congestionControl,
-              value: nodeTuicCongestionControls.contains(cc) ? cc : 'cubic',
-              items: [
-                for (final c in nodeTuicCongestionControls) DropdownMenuItem(value: c, child: Text(c)),
-              ],
+              value: cc,
+              items: [for (final c in nodeTuicCongestionControls) DropdownMenuItem(value: c, child: Text(c))],
               onChanged: (v) {
                 if (v != null) notifier.setPath(['congestion_control'], v);
               },
             ),
             NodeDropdownField<String>(
               label: t.pages.nodeEditor.fields.udpRelayMode,
-              value: nodeTuicUdpRelayModes.contains(relay) ? relay : 'native',
-              items: [
-                for (final r in nodeTuicUdpRelayModes) DropdownMenuItem(value: r, child: Text(r)),
-              ],
+              value: relay,
+              items: [for (final r in nodeTuicUdpRelayModes) DropdownMenuItem(value: r, child: Text(r))],
               onChanged: (v) {
                 if (v != null) notifier.setPath(['udp_relay_mode'], v);
               },

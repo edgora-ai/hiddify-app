@@ -47,6 +47,7 @@ class NodeCommonFields extends HookConsumerWidget {
                 key: ValueKey('tag-$rawTag'),
                 label: t.common.name,
                 initialValue: displayName,
+                initialValueRevision: protocol,
                 maxLines: 1,
                 textCapitalization: TextCapitalization.none,
                 validator: (_) => errorFor('tag'),
@@ -61,8 +62,7 @@ class NodeCommonFields extends HookConsumerWidget {
             value: protocol,
             enabled: data.isNew,
             items: [
-              for (final p in nodeFormProtocols)
-                DropdownMenuItem(value: p, child: Text(ProxyType.fromJson(p).label)),
+              for (final p in nodeFormProtocols) DropdownMenuItem(value: p, child: Text(ProxyType.fromJson(p).label)),
             ],
             onChanged: (v) {
               if (v == null || v == protocol) return;
@@ -76,6 +76,7 @@ class NodeCommonFields extends HookConsumerWidget {
               key: ValueKey('server-$rawTag'),
               label: t.pages.nodeEditor.fields.server,
               initialValue: NodeJson.asString(draft['server']) ?? '',
+              initialValueRevision: protocol,
               maxLines: 1,
               keyboardType: TextInputType.url,
               textCapitalization: TextCapitalization.none,
@@ -87,6 +88,7 @@ class NodeCommonFields extends HookConsumerWidget {
               key: ValueKey('port-$rawTag'),
               label: t.pages.nodeEditor.fields.port,
               initialValue: (NodeJson.asInt(draft['server_port']) ?? 443).toString(),
+              initialValueRevision: protocol,
               maxLines: 1,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -103,10 +105,7 @@ class NodeCommonFields extends HookConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  t.pages.nodeEditor.fields.groups,
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
+                Text(t.pages.nodeEditor.fields.groups, style: Theme.of(context).textTheme.labelMedium),
                 const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,

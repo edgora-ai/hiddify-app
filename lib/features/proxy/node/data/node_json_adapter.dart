@@ -68,6 +68,15 @@ abstract final class NodeJson {
     return null;
   }
 
+  /// Optional integer form input. Only blank input removes the setting;
+  /// malformed non-empty text stays in the draft so validation can reject it.
+  /// Explicit radix 10 prevents hexadecimal input from becoming an integer.
+  static Object? optionalIntInput(String input) {
+    final value = input.trim();
+    if (value.isEmpty) return null;
+    return int.tryParse(value, radix: 10) ?? value;
+  }
+
   /// Reads a String, converting numbers/bools; null stays null.
   static String? asString(dynamic v) {
     if (v == null) return null;

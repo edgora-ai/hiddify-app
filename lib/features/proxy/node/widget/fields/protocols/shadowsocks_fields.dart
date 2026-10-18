@@ -31,10 +31,8 @@ class ShadowsocksFields extends HookConsumerWidget {
         NodeFieldPadding(
           child: NodeDropdownField<String>(
             label: t.pages.nodeEditor.fields.method,
-            value: nodeShadowsocksMethods.contains(method) ? method : nodeShadowsocksMethods.first,
-            items: [
-              for (final m in nodeShadowsocksMethods) DropdownMenuItem(value: m, child: Text(m)),
-            ],
+            value: method,
+            items: [for (final m in nodeShadowsocksMethods) DropdownMenuItem(value: m, child: Text(m))],
             onChanged: (v) {
               if (v != null) notifier.setPath(['method'], v);
             },
@@ -52,7 +50,7 @@ class ShadowsocksFields extends HookConsumerWidget {
         NodeFieldPadding(
           child: NodeDropdownField<String>(
             label: t.pages.nodeEditor.fields.plugin,
-            value: nodeShadowsocksPlugins.contains(plugin) ? plugin : '',
+            value: plugin,
             items: [
               for (final p in nodeShadowsocksPlugins) DropdownMenuItem(value: p, child: Text(p.isEmpty ? '-' : p)),
             ],
@@ -63,6 +61,8 @@ class ShadowsocksFields extends HookConsumerWidget {
           child: CustomTextFormField(
             label: t.pages.nodeEditor.fields.pluginOptions,
             initialValue: NodeJson.asString(draft['plugin_opts']) ?? '',
+            initialValueRevision: plugin,
+            enabled: nodeShadowsocksPlugins.contains(plugin),
             maxLines: 1,
             textCapitalization: TextCapitalization.none,
             enableSuggestions: false,

@@ -48,10 +48,8 @@ class NodeMultiplexFields extends HookConsumerWidget {
           NodeFieldPadding(
             child: NodeDropdownField<String>(
               label: t.pages.nodeEditor.fields.multiplexProtocol,
-              value: nodeMultiplexProtocols.contains(protocol) ? protocol : 'smux',
-              items: [
-                for (final p in nodeMultiplexProtocols) DropdownMenuItem(value: p, child: Text(p)),
-              ],
+              value: protocol,
+              items: [for (final p in nodeMultiplexProtocols) DropdownMenuItem(value: p, child: Text(p))],
               onChanged: (v) {
                 if (v != null) notifier.setPath(['multiplex', 'protocol'], v);
               },

@@ -15,10 +15,7 @@ class NodeSectionHeader extends StatelessWidget {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(
-        title,
-        style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary),
-      ),
+      child: Text(title, style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary)),
     );
   }
 }
@@ -31,10 +28,7 @@ class NodeFieldPadding extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: child,
-    );
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6), child: child);
   }
 }
 
@@ -59,15 +53,19 @@ class NodeDropdownField<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final knownValue = items.any((item) => item.value == value);
     return DropdownButtonFormField<T>(
+      // A form reset may change the selection without a user dropdown event.
+      key: ValueKey(value),
       initialValue: value,
-      items: items,
-      onChanged: enabled ? onChanged : null,
-      decoration: InputDecoration(
-        isDense: true,
-        label: Text(label),
-        helperText: helperText,
-      ),
+      items: [
+        ...items,
+        if (!knownValue) DropdownMenuItem<T>(value: value, enabled: false, child: Text(value.toString())),
+      ],
+      // Unknown values are display-only, not a request to coerce the draft to
+      // the first supported item. In particular, never replace http/quic.
+      onChanged: enabled && knownValue ? onChanged : null,
+      decoration: InputDecoration(isDense: true, label: Text(label), helperText: helperText),
     );
   }
 }
@@ -80,6 +78,8 @@ class NodePasswordField extends HookConsumerWidget {
     required this.label,
     required this.initialValue,
     required this.onChanged,
+    this.initialValueRevision,
+    this.enabled = true,
     this.validator,
     this.helperText,
     this.keyboardType,
@@ -88,6 +88,8 @@ class NodePasswordField extends HookConsumerWidget {
   final String label;
   final String initialValue;
   final ValueChanged<String> onChanged;
+  final Object? initialValueRevision;
+  final bool enabled;
   final String? Function(String?)? validator;
   final String? helperText;
   final TextInputType? keyboardType;
@@ -98,6 +100,8 @@ class NodePasswordField extends HookConsumerWidget {
     return CustomTextFormField(
       label: label,
       initialValue: initialValue,
+      initialValueRevision: initialValueRevision,
+      enabled: enabled,
       onChanged: onChanged,
       validator: validator,
       helperText: helperText,
@@ -108,7 +112,7 @@ class NodePasswordField extends HookConsumerWidget {
       maxLines: 1,
       suffixIcon: IconButton(
         icon: Icon(obscured.value ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-        onPressed: () => obscured.value = !obscured.value,
+        onPressed: enabled ? () => obscured.value = !obscured.value : null,
       ),
     );
   }
@@ -126,10 +130,7 @@ class NodeFieldRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Row(
         children: [
-          for (var i = 0; i < children.length; i++) ...[
-            if (i > 0) const Gap(12),
-            Expanded(child: children[i]),
-          ],
+          for (var i = 0; i < children.length; i++) ...[if (i > 0) const Gap(12), Expanded(child: children[i])],
         ],
       ),
     );

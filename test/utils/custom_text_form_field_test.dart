@@ -27,6 +27,7 @@ class _RevisionHostState extends State<_RevisionHost> {
   TextEditingController? _externalController;
   final validations = <String?>[];
   final userChanges = <String>[];
+  int builds = 0;
 
   void replace({required String text, required Object? revision, TextEditingController? controller}) {
     setState(() {
@@ -37,34 +38,44 @@ class _RevisionHostState extends State<_RevisionHost> {
   }
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(8),
-    child: CustomTextFormField(
-      initialValue: _initialValue,
-      initialValueRevision: _revision,
-      controller: _externalController,
-      maxLines: 1,
-      validator: (value) {
-        validations.add(value);
-        return value == 'initial' ? 'initial error' : null;
-      },
-      onChanged: (text) {
-        userChanges.add(text);
-        setState(() => _initialValue = text.trim());
-      },
-    ),
-  );
+  Widget build(BuildContext context) {
+    builds++;
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: CustomTextFormField(
+        initialValue: _initialValue,
+        initialValueRevision: _revision,
+        controller: _externalController,
+        maxLines: 1,
+        validator: (value) {
+          validations.add(value);
+          return value == 'initial' ? 'initial error' : null;
+        },
+        onChanged: (text) {
+          userChanges.add(text);
+          setState(() => _initialValue = text.trim());
+        },
+      ),
+    );
+  }
 }
 
-Future<GlobalKey<_RevisionHostState>> _mountRevisionHost(WidgetTester tester, {VoidCallback? onFormChanged}) async {
+Future<GlobalKey<_RevisionHostState>> _mountRevisionHost(
+  WidgetTester tester, {
+  VoidCallback? onFormChanged,
+  TextDirection textDirection = TextDirection.ltr,
+}) async {
   final key = GlobalKey<_RevisionHostState>();
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: Form(
-          autovalidateMode: AutovalidateMode.always,
-          onChanged: onFormChanged,
-          child: _RevisionHost(key: key),
+        body: Directionality(
+          textDirection: textDirection,
+          child: Form(
+            autovalidateMode: AutovalidateMode.always,
+            onChanged: onFormChanged,
+            child: _RevisionHost(key: key),
+          ),
         ),
       ),
     ),
@@ -135,6 +146,42 @@ void main() {
     expect(find.text('initial error'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  final directionChanges = <(String, TextDirection, String)>[
+    ('updates LTR to RTL', TextDirection.ltr, 'مرحبا'),
+    ('restores inherited RTL after clearing Latin text', TextDirection.rtl, ''),
+  ];
+  for (final (description, inheritedDirection, text) in directionChanges) {
+    testWidgets('descendant-only revision $description under a stable Form', (tester) async {
+      final host = await _mountRevisionHost(tester, textDirection: inheritedDirection);
+      final controller = _editable(tester).controller;
+      final editableState = tester.state<EditableTextState>(find.byType(EditableText));
+      final formWidget = tester.widget<Form>(find.byType(Form));
+      final formState = tester.state<FormState>(find.byType(Form));
+      final hostBuilds = host.currentState!.builds;
+      expect(controller.text, 'initial');
+      expect(_editable(tester).textDirection, TextDirection.ltr);
+      expect(Directionality.of(tester.element(find.byType(EditableText))), inheritedDirection);
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      host.currentState!.replace(text: text, revision: 1);
+      await tester.pumpAndSettle();
+      expect(_editable(tester).controller, same(controller));
+      expect(tester.state<EditableTextState>(find.byType(EditableText)), same(editableState));
+      expect(controller.text, text);
+      expect(tester.state<FormFieldState<String>>(find.byType(TextFormField)).value, text);
+      expect(_editable(tester).textDirection, TextDirection.rtl);
+      if (text.isEmpty) expect(tester.widget<TextField>(find.byType(TextField)).textDirection, isNull);
+      // No pumpWidget or extra parent rebuild may mask the wrapper's stale direction.
+      expect(host.currentState!.builds, hostBuilds + 1);
+      expect(tester.widget<Form>(find.byType(Form)), same(formWidget));
+      expect(tester.state<FormState>(find.byType(Form)), same(formState));
+      expect(notifications, 1);
+      expect(host.currentState!.userChanges, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   final replacements = <(String, String, Object?, String)>[
     ('a newer revision', 'newest', 2, 'newest'),

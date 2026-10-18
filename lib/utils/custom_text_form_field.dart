@@ -122,6 +122,9 @@ class _CustomTextFormFieldState extends State<CustomTextFormField> {
           text: text,
           selection: TextSelection.collapsed(offset: text.length),
         );
+        // The wrapper derives text direction from the controller in build.
+        // Refresh it after a successful sync without relying on a parent build.
+        if (mounted) setState(() {});
       });
     }
   }

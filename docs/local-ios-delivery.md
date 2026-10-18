@@ -55,6 +55,21 @@ These are offline Python/fake-tool results, not Go/Flutter compilation, native d
 
 Fixed Go 1.26.3 preparation is currently blocked: the official toolchain-module download timed out, and a separate official-tag source clone reached its deadline before a source commit was obtained. Both failures are retained. The installed Go 1.26.4 is not being represented as the requested package compiler. No new Core bind or App archive has started at this checkpoint.
 
+### Host regression and fork merge checkpoint — 2026-10-19
+
+The following results were read back from complete logs, not inferred from a green badge:
+
+- sing-box PR [#1](https://github.com/edgora-ai/hiddify-sing-box/pull/1) merged as `4a9b51ae38646f5162927d45603e9a2b39e83258`. The reviewed head `0078921e` passed 145 top-level tests and 658 named subtests, with no skips, in [run 39153517303](https://github.com/edgora-ai/hiddify-sing-box/actions/runs/39153517303).
+- Core PR [#1](https://github.com/edgora-ai/hiddify-core/pull/1) merged as `9178562f45a9fa6829651219ac52875da24e81a4`, pinning that actual sing-box merge. Its reviewed head `b7528d1` passed 15 top-level tests and 151 named subtests, with no skips, in [run 39154619446](https://github.com/edgora-ai/hiddify-core/actions/runs/39154619446).
+- Both jobs used Go 1.26.3 on Linux/amd64 with CGO disabled and an explicit allowlist. Neither job ran the old XUDP fixture, the race detector or Apple code. The deliberately skipped legacy Core publication job is not counted as a test pass.
+- App `c8c4f053` passed the updated iOS entry/export contract suite: 40 Python tests, exit 0. These use synthetic files and a fake Flutter executable, not Xcode.
+
+The earlier sing-box run `39151884609` remains a recorded failure: its original 142 tests passed, then libbox failed to link before the three new neighbor tests ran. A separately reviewed change explicitly reproduced the existing production `-checklinkname=0` contract for the libbox test binary; Core's two test binaries require the same contract. This relaxes linkname checks for the entire affected binary, not just one symbol. Passing these tests does not establish private OOM-profiler ABI compatibility, Darwin route-socket behavior or native binding compatibility.
+
+App save/concurrency/retry fixes and the bounded Flutter/Dart-to-Go workflow are undergoing separate review and execution. They are not reported as passing in this checkpoint. The App now pins the actual Core merge rather than a feature-branch SHA.
+
+Local package preparation remains blocked independently of the Linux results. Three fixed Mac Go 1.26.3 acquisition paths failed before a complete SDK was obtained. The corrected private Flutter 3.38.5 SDK reported Dart 3.10.4 successfully, but its first offline, enforced-lockfile App dependency preparation timed out. No local App code generation, new Core bind, archive, signature, backup or installation is claimed from these attempts. The failures and unused native-build allowance are retained; the installed Go 1.26.4 is not substituted for the requested compiler.
+
 ## Local package path
 
 The legacy `ios-libs` target downloads a published Core and can overwrite the local framework. It is not used for this source delivery. The legacy Core preparation also performs unrelated dependency updates and tool installation; the separate `ios-local` entry avoids that path.
@@ -67,6 +82,8 @@ The local build uses:
 4. Release compilation of `lib/main.dart`, with the driver disabled. Release build mode does not by itself select the production-channel entry point.
 5. The parameterized local export options, not the upstream App Store/manual export plist. Export does not upload symbols, change versions automatically, publish a Release or send a package to a store.
 6. Verification of the final Runner and tunnel extension build numbers, signatures, provisioning, application identifiers, App Group, Keychain groups, minimum OS and package hash.
+
+The App's local workspace is single-use. The entry refuses existing archive/IPA outputs and atomically claims `.ios-local-attempt` before invoking Flutter. It retains that claim and any outputs after success or failure; changing the build number does not permit a retry. Do not remove the claim or reuse a failed output tree to bypass the approved attempt limit. Flutter 3.38.5 can report exit 0 after archiving even if IPA export fails, so a successful command still requires direct package, plist, signature and hash checks.
 
 Core and App automatic publication workflows are gated away from the delivery forks. Do not create version tags or manually dispatch publishing jobs for this task. An asset named `draft` in the upstream workflow is a public prerelease, not evidence of a private draft.
 

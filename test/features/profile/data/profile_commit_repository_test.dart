@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart' show Value, Variable;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fpdart/fpdart.dart';
 import 'package:hiddify/core/db/db.dart';
 import 'package:hiddify/features/profile/data/profile_data_mapper.dart';
 import 'package:hiddify/features/profile/data/profile_parser.dart';
@@ -11,6 +12,37 @@ import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/model/profile_failure.dart';
 
 import 'profile_commit_test_support.dart';
+
+class _CountingCommitRepository extends TestProfileRepository {
+  _CountingCommitRepository(super.harness);
+
+  int configCalls = 0;
+  int detailsCalls = 0;
+
+  ProfileRepository get repositoryView => this;
+
+  @override
+  TaskEither<ProfileFailure, Unit> commitConfig(String id, String content, {required String expectedRawContent}) {
+    configCalls++;
+    return super.commitConfig(id, content, expectedRawContent: expectedRawContent);
+  }
+
+  @override
+  TaskEither<ProfileFailure, Unit> commitDetails(
+    ProfileEntity profile, {
+    required UserOverride? expectedUserOverride,
+    String? content,
+    String? expectedRawContent,
+  }) {
+    detailsCalls++;
+    return super.commitDetails(
+      profile,
+      expectedUserOverride: expectedUserOverride,
+      content: content,
+      expectedRawContent: expectedRawContent,
+    );
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +55,50 @@ void main() {
   });
 
   tearDown(() => storage.dispose());
+
+  test(
+    'ProfileRepository-typed checked writes dispatch once to the writer and retain lazy CAS/override saves',
+    () async {
+      final profile = await storage.seed();
+      final counted = _CountingCommitRepository(storage);
+      final ProfileRepository base = counted.repositoryView;
+      final raw = requireRight(await base.getRawConfig(profile.id).run());
+      final edited = originalConfig();
+      (edited['outbounds'] as List).add(addedNode());
+
+      final configTask = base.commitConfig(profile.id, jsonEncode(edited), expectedRawContent: raw);
+      expect(counted.configCalls, 1);
+      expect(counted.validationInputs, isEmpty);
+      expect(await storage.paths.file(profile.id).readAsString(), raw);
+      requireRight(await configTask.run());
+      expect(counted.configCalls, 1);
+      expect(counted.validationInputs, hasLength(1));
+      await storage.verifyStored(base, edited);
+
+      final stale = await base.commitConfig(profile.id, raw, expectedRawContent: raw).run();
+      expect(counted.configCalls, 2);
+      expect(
+        stale.getLeft().toNullable(),
+        isA<ProfileUnexpectedFailure>().having((failure) => failure.error, 'cause', isA<ProfileCommitConflict>()),
+      );
+      expect(counted.validationInputs, hasLength(1));
+      await storage.verifyStored(base, edited);
+
+      final committedBytes = await storage.paths.file(profile.id).readAsString();
+      final override = testOverride.copyWith(preserveDomainForFallbackProxy: true);
+      final detailsTask = base.commitDetails(
+        profile.copyWith(userOverride: override),
+        expectedUserOverride: testOverride,
+      );
+      expect(counted.detailsCalls, 1);
+      expect((await storage.dao.getById(profile.id))!.toEntity().userOverride, testOverride);
+      requireRight(await detailsTask.run());
+      expect(counted.detailsCalls, 1);
+      expect(counted.validationInputs, hasLength(1));
+      expect(await storage.paths.file(profile.id).readAsString(), committedBytes);
+      await storage.verifyStored(base, edited, userOverride: override);
+    },
+  );
 
   final headerCases = <({String name, String? stored, Map<String, dynamic>? expected})>[
     (name: 'SQL NULL', stored: null, expected: null),

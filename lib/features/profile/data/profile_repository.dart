@@ -60,7 +60,9 @@ extension ProfileRepositoryCommits on ProfileRepository {
   TaskEither<ProfileFailure, Unit> commitConfig(String id, String content, {required String expectedRawContent}) {
     final repository = this;
     if (repository is ProfileCommitWriter) {
-      return repository.commitConfig(id, content, expectedRawContent: expectedRawContent);
+      // Extension calls are statically resolved; invoke the capability member.
+      final writer = repository as ProfileCommitWriter;
+      return writer.commitConfig(id, content, expectedRawContent: expectedRawContent);
     }
     return TaskEither.left(ProfileFailure.unexpected(UnsupportedError('Checked profile writes are unavailable')));
   }
@@ -73,7 +75,8 @@ extension ProfileRepositoryCommits on ProfileRepository {
   }) {
     final repository = this;
     if (repository is ProfileCommitWriter) {
-      return repository.commitDetails(
+      final writer = repository as ProfileCommitWriter;
+      return writer.commitDetails(
         profile,
         expectedUserOverride: expectedUserOverride,
         content: content,

@@ -98,7 +98,7 @@ Future<void> _queueRevisionAfterFrame(
   // edit, controller handoff or unmount to invalidate it before delivery.
   tester.binding.addPostFrameCallback((_) {
     key.currentState!.replace(text: text, revision: revision);
-    tester.binding.buildOwner!.buildScope(key.currentContext!);
+    tester.binding.buildOwner!.buildScope(tester.element(find.byKey(key)));
   });
   await tester.pump();
 }
@@ -171,8 +171,13 @@ void main() {
       expect(tester.state<EditableTextState>(find.byType(EditableText)), same(editableState));
       expect(controller.text, text);
       expect(tester.state<FormFieldState<String>>(find.byType(TextFormField)).value, text);
-      expect(_editable(tester).textDirection, TextDirection.rtl);
-      if (text.isEmpty) expect(tester.widget<TextField>(find.byType(TextField)).textDirection, isNull);
+      expect(editableState.renderEditable.textDirection, TextDirection.rtl);
+      if (text.isEmpty) {
+        expect(tester.widget<TextField>(find.byType(TextField)).textDirection, isNull);
+        expect(_editable(tester).textDirection, isNull);
+      } else {
+        expect(_editable(tester).textDirection, TextDirection.rtl);
+      }
       // No pumpWidget or extra parent rebuild may mask the wrapper's stale direction.
       expect(host.currentState!.builds, hostBuilds + 1);
       expect(tester.widget<Form>(find.byType(Form)), same(formWidget));

@@ -93,14 +93,27 @@ Future<void> _queueRevisionAfterFrame(
   required String text,
   required Object? revision,
 }) async {
+  final controller = _editable(tester).controller;
+  final before = controller.value;
+  var revisionDelivered = false;
   // Deliver a late widget update after this frame's callback list was taken.
   // Its controller sync must wait for the next frame, allowing a newer update,
   // edit, controller handoff or unmount to invalidate it before delivery.
   tester.binding.addPostFrameCallback((_) {
     key.currentState!.replace(text: text, revision: revision);
     tester.binding.buildOwner!.buildScope(tester.element(find.byKey(key)));
+    revisionDelivered = true;
   });
+  // Post-frame registration does not schedule a frame; automated pump only
+  // draws scheduled frames. The adversary must not supply this first frame.
+  tester.binding.scheduleFrame();
   await tester.pump();
+  expect(revisionDelivered, isTrue, reason: 'Deliver the widget update before the adversarial action');
+  final field = tester.widget<CustomTextFormField>(find.byType(CustomTextFormField));
+  expect(field.initialValueRevision, revision);
+  expect(field.initialValue, text);
+  expect(_editable(tester).controller, same(controller));
+  expect(controller.value, before, reason: 'The controller sync must still be queued for the next frame');
 }
 
 Future<void> _mountField(

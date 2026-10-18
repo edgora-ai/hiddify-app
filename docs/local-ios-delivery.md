@@ -70,6 +70,19 @@ App save/concurrency/retry fixes and the bounded Flutter/Dart-to-Go workflow are
 
 Local package preparation remains blocked independently of the Linux results. Three fixed Mac Go 1.26.3 acquisition paths failed before a complete SDK was obtained. The corrected private Flutter 3.38.5 SDK reported Dart 3.10.4 successfully, but its first offline, enforced-lockfile App dependency preparation timed out. No local App code generation, new Core bind, archive, signature, backup or installation is claimed from these attempts. The failures and unused native-build allowance are retained; the installed Go 1.26.4 is not substituted for the requested compiler.
 
+### App regression repair checkpoint — 2026-10-19
+
+Two actual Flutter runs remain recorded failures, not successful dependency preparation alone:
+
+- [Run 39156226385](https://github.com/edgora-ai/hiddify-app/actions/runs/39156226385), at `6875d692`, exposed build-time Form notifications and nullable profile-header handling failures.
+- [Run 39159787166](https://github.com/edgora-ai/hiddify-app/actions/runs/39159787166), at `7004faff`, passed locked dependency preparation and code generation, then failed the business-test step. The reporter recorded 319 visible successes, 15 hidden loading successes, and 14 errors, without a global completion event. A test passed `BuildContext` where Flutter requires `Element`; configuration commits also recursed through the repository extension and overflowed the stack. Targeted analysis did not run.
+
+Both runs completed the real Dart-to-Go bridge, including the parent Go test, all 12 distinct synthetic saved-profile cases, and successful Go package completion. That individual result is not a complete Flutter-suite pass. The second run does not test later local commits.
+
+The deferred Form update and text-direction fixes, including the corrected effective-direction and `Element` assertions in `2f6893d0`, have independent source review. Repository dispatch repair and a complete run against the final candidate are still required before App merge. No tests are skipped or given longer deadlines to hide the failures.
+
+The offline Python contracts were also run against `2f6893d0`: 144 Ping0-tool tests, 40 iOS-entry tests, and 10 Core-entry tests, each with exit 0. These synthetic, standard-library results do not launch the App, compile an iOS package, exercise signing, or establish device or network acceptance. The local SDK and package-preparation blockers above remain unchanged.
+
 ## Local package path
 
 The legacy `ios-libs` target downloads a published Core and can overwrite the local framework. It is not used for this source delivery. The legacy Core preparation also performs unrelated dependency updates and tool installation; the separate `ios-local` entry avoids that path.

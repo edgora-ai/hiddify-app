@@ -32,6 +32,7 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     }
 
     listenSelf((previous, next) async {
+      if (next.asData?.value is! Connecting) _connectingBoundaryRevision++;
       if (previous == next) return;
       if (previous case AsyncData(:final value) when !value.isConnected) {
         if (next case AsyncData(value: final Connected _)) {
@@ -100,6 +101,7 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
 
   // Invalidates a pending profile-bound action when the user changes intent.
   int _connectionIntentRevision = 0;
+  int _connectingBoundaryRevision = 0;
   int _pendingUnboundOperations = 0;
   bool _startedByUserIntent = false;
   String? _observedActiveProfileId;
@@ -119,7 +121,8 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     final pendingStart = _pendingRetryStart;
     if (pendingStart != null &&
         pendingStart.revision == _connectionIntentRevision &&
-        pendingStart.profileId == _observedActiveProfileId &&
+        (pendingStart.profileId == _observedActiveProfileId ||
+            (_observedActiveProfileId == null && ref.read(activeProfileProvider).isLoading)) &&
         (state is AsyncError<ConnectionStatus> || state.asData?.value is Disconnected)) {
       // The gate already accepted this same Start. A duplicate must not cancel
       // it by changing intent before its own _connect would be ignored.
@@ -177,17 +180,21 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     final intentRevision = _connectionIntentRevision;
     return _singleStart.run<bool>(() async {
       if (_pendingUnboundOperations != 0) return false;
-      await ref.read(activeProfileProvider.future);
-      if (intentRevision != _connectionIntentRevision || _pendingUnboundOperations != 0) return false;
-      var active = ref.read(activeProfileProvider).asData?.value;
-      if (active?.id != expectedProfileId) return false;
-      final initial = state;
-      final canStart = initial is AsyncError<ConnectionStatus> || initial.asData?.value is Disconnected;
-      final canReload = initial.asData?.value is Connected;
-      if (!canStart && !canReload) return false;
-
-      if (canStart) _pendingRetryStart = (profileId: expectedProfileId, revision: intentRevision);
+      // A duplicate Start can arrive during the first active-profile read too.
+      if (state is AsyncError<ConnectionStatus> || state.asData?.value is Disconnected) {
+        _pendingRetryStart = (profileId: expectedProfileId, revision: intentRevision);
+      }
       try {
+        await ref.read(activeProfileProvider.future);
+        if (intentRevision != _connectionIntentRevision || _pendingUnboundOperations != 0) return false;
+        var active = ref.read(activeProfileProvider).asData?.value;
+        if (active?.id != expectedProfileId) return false;
+        final initial = state;
+        final canStart = initial is AsyncError<ConnectionStatus> || initial.asData?.value is Disconnected;
+        final canReload = initial.asData?.value is Connected;
+        if (!canStart && !canReload) return false;
+
+        _pendingRetryStart = canStart ? (profileId: expectedProfileId, revision: intentRevision) : null;
         // Preferences also performs async IO. A selection change, manual stop or
         // status transition during that wait must win over this pending retry.
         final startedByUser = ref.read(Preferences.startedByUser.notifier);
@@ -210,11 +217,11 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
         final dialogs = ref.read(dialogNotifierProvider.notifier);
         final t = ref.read(translationsProvider).requireValue;
         final disableMemoryLimit = ref.read(Preferences.disableMemoryLimit);
-        // Keep the published AsyncValue itself as the ownership token, not just
-        // an equal Connecting status that a later operation could also publish.
+        // The core can republish Connecting for this Start. Any intervening
+        // non-Connecting state ends ownership, even if Connecting follows it.
         final starting = canStart ? AsyncData<ConnectionStatus>(const Connecting()) : null;
         if (starting != null) state = starting;
-        final ownedStarting = canStart ? state : null;
+        final ownedStarting = canStart ? _connectingBoundaryRevision : null;
         try {
           // Do not call another public SingleCall entry while holding this gate.
           final result =
@@ -235,13 +242,13 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
               intentRevision == _connectionIntentRevision &&
               _observedActiveProfileId == expectedProfileId &&
               state.asData?.value is Connecting &&
-              identical(state, ownedStarting)) {
+              _connectingBoundaryRevision == ownedStarting) {
             state = AsyncError(error, stackTrace);
           }
           rethrow;
         }
       } finally {
-        if (canStart) _pendingRetryStart = null;
+        _pendingRetryStart = null;
       }
     }, onIgnored: () => false);
   }

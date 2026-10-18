@@ -171,13 +171,13 @@ void main() {
     await storage.dispose();
   });
 
-  Future<ConnectionNotifier> openStartState({required bool initialError}) async {
+  Future<ConnectionNotifier> openStartState({required bool initialError, bool waitForActive = true}) async {
     connection.initial = const Disconnected();
     final listening = Completer<void>();
     connection.statuses.onListen = () {
       if (!listening.isCompleted) listening.complete();
     };
-    final notifier = await open();
+    final notifier = await open(waitForActive: waitForActive);
     await listening.future;
     if (initialError) {
       final observed = Completer<void>();
@@ -191,8 +191,47 @@ void main() {
     return notifier;
   }
 
+  Future<void> publishConnectionEvent(AsyncValue<ConnectionStatus> event) async {
+    final observed = Completer<void>();
+    final subscription = container.listen(connectionNotifierProvider, (_, next) {
+      final matches = switch (event) {
+        AsyncData(:final value) => next.asData?.value == value,
+        AsyncError(:final error) => identical(next.asError?.error, error),
+        _ => false,
+      };
+      if (matches && !observed.isCompleted) observed.complete();
+    });
+    try {
+      switch (event) {
+        case AsyncData(:final value):
+          connection.statuses.add(value);
+        case AsyncError(:final error, :final stackTrace):
+          connection.statuses.addError(error, stackTrace);
+        default:
+          throw ArgumentError.value(event, 'event');
+      }
+      await observed.future;
+    } finally {
+      subscription.close();
+    }
+  }
+
   for (final initialError in [false, true]) {
     final initialName = initialError ? 'AsyncError' : 'Disconnected';
+
+    test('$initialName duplicate tray Start during the first active read preserves the accepted Start', () async {
+      final selection = Completer<ProfileEntity?>();
+      active = _ActiveProfile(selection.future);
+      final notifier = await openStartState(initialError: initialError, waitForActive: false);
+      final retry = notifier.retryForProfile(profile.id);
+      expect(container.read(activeProfileProvider).isLoading, isTrue);
+      await notifier.toggleConnection();
+      expect(connection.requests, isEmpty);
+      selection.complete(profile);
+      expect(await retry, isTrue);
+      expect(connection.requests, [(operation: 'connect', profileId: profile.id)]);
+      expect(connection.disconnects, 0);
+    });
 
     test('$initialName duplicate tray Start during retry preference IO preserves the accepted Start', () async {
       final gated = _GatedPreferences(preferences);
@@ -208,103 +247,124 @@ void main() {
       expect(connection.disconnects, 0);
     });
 
-    test('$initialName start throw clears only its Connecting and allows a real second request', () async {
-      final notifier = await openStartState(initialError: initialError);
-      final entered = Completer<void>();
-      final release = Completer<void>();
-      final failure = StateError('synthetic start failure without a terminal event');
-      connection.entered = entered;
-      connection.release = release.future;
-      connection.requestException = failure;
-      connection.emitConnected = false;
-      final retry = notifier.retryForProfile(profile.id);
-      final failed = expectLater(retry, throwsA(same(failure)));
-      await entered.future;
-      expect(container.read(connectionNotifierProvider).asData?.value, isA<Connecting>());
-      release.complete();
-      await failed;
-      expect(container.read(connectionNotifierProvider).asError?.error, same(failure));
-      connection.requestException = null;
-      connection.emitConnected = true;
-      expect(await notifier.retryForProfile(profile.id), isTrue);
-      expect(connection.requests, [
-        (operation: 'connect', profileId: profile.id),
-        (operation: 'connect', profileId: profile.id),
-      ]);
-    });
-
-    test('$initialName start throw after manual Stop does not replace the stopped state', () async {
-      final notifier = await openStartState(initialError: initialError);
-      final entered = Completer<void>();
-      final release = Completer<void>();
-      final failure = StateError('synthetic late start failure after Stop');
-      connection.entered = entered;
-      connection.release = release.future;
-      connection.requestException = failure;
-      final retry = notifier.retryForProfile(profile.id);
-      final failed = expectLater(retry, throwsA(same(failure)));
-      await entered.future;
-      final stopped = Completer<void>();
-      final subscription = container.listen(connectionNotifierProvider, (_, next) {
-        if (next.asData?.value is Disconnected && !stopped.isCompleted) stopped.complete();
-      });
-      await notifier.abortConnection();
-      await stopped.future;
-      subscription.close();
-      final newer = container.read(connectionNotifierProvider);
-      release.complete();
-      await failed;
-      expect(identical(container.read(connectionNotifierProvider), newer), isTrue);
-      expect(connection.disconnects, 1);
-      expect(connection.requests, [(operation: 'connect', profileId: profile.id)]);
-    });
-
-    test('$initialName start throw after target replacement cannot clean up the newer intent', () async {
-      final notifier = await openStartState(initialError: initialError);
-      final entered = Completer<void>();
-      final release = Completer<void>();
-      final failure = StateError('synthetic late start failure after target replacement');
-      connection.entered = entered;
-      connection.release = release.future;
-      connection.requestException = failure;
-      final retry = notifier.retryForProfile(profile.id);
-      final failed = expectLater(retry, throwsA(same(failure)));
-      await entered.future;
-      final newer = container.read(connectionNotifierProvider);
-      active.select(profile.copyWith(id: 'replacement-profile'));
-      await container.read(activeProfileProvider.future);
-      release.complete();
-      await failed;
-      expect(identical(container.read(connectionNotifierProvider), newer), isTrue);
-      expect(container.read(activeProfileProvider).asData?.value?.id, 'replacement-profile');
-      expect(connection.requests, [(operation: 'connect', profileId: profile.id)]);
-    });
-
-    for (final terminal in [const Connected(), const Disconnected()]) {
-      test('$initialName start throw preserves the already published $terminal terminal state', () async {
+    for (final coreConnecting in [false, true]) {
+      final eventName = coreConnecting ? ' after its core Connecting event' : '';
+      test('$initialName start throw$eventName clears only its Connecting and allows a real second request', () async {
         final notifier = await openStartState(initialError: initialError);
         final entered = Completer<void>();
         final release = Completer<void>();
-        final failure = StateError('synthetic late start failure after terminal event');
+        final failure = StateError('synthetic start failure without a terminal event');
+        connection.entered = entered;
+        connection.release = release.future;
+        connection.requestException = failure;
+        connection.emitConnected = false;
+        final retry = notifier.retryForProfile(profile.id);
+        final failed = expectLater(retry, throwsA(same(failure)));
+        await entered.future;
+        expect(container.read(connectionNotifierProvider).asData?.value, isA<Connecting>());
+        if (coreConnecting) {
+          final starting = container.read(connectionNotifierProvider);
+          await publishConnectionEvent(const AsyncData<ConnectionStatus>(Connecting()));
+          expect(identical(container.read(connectionNotifierProvider), starting), isFalse);
+        }
+        release.complete();
+        await failed;
+        expect(container.read(connectionNotifierProvider).asError?.error, same(failure));
+        connection.requestException = null;
+        connection.emitConnected = true;
+        expect(await notifier.retryForProfile(profile.id), isTrue);
+        expect(connection.requests, [
+          (operation: 'connect', profileId: profile.id),
+          (operation: 'connect', profileId: profile.id),
+        ]);
+      });
+    }
+
+    for (final lateConnecting in [false, true]) {
+      final eventName = lateConnecting ? ' and a late Connecting event' : '';
+      test('$initialName start throw after manual Stop$eventName does not replace the newer state', () async {
+        final notifier = await openStartState(initialError: initialError);
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        final failure = StateError('synthetic late start failure after Stop');
         connection.entered = entered;
         connection.release = release.future;
         connection.requestException = failure;
         final retry = notifier.retryForProfile(profile.id);
         final failed = expectLater(retry, throwsA(same(failure)));
         await entered.future;
-        final observed = Completer<void>();
+        final stopped = Completer<void>();
         final subscription = container.listen(connectionNotifierProvider, (_, next) {
-          if (next.asData?.value == terminal && !observed.isCompleted) observed.complete();
+          if (next.asData?.value is Disconnected && !stopped.isCompleted) stopped.complete();
         });
-        connection.statuses.add(terminal);
-        await observed.future;
+        await notifier.abortConnection();
+        await stopped.future;
         subscription.close();
+        if (lateConnecting) await publishConnectionEvent(const AsyncData<ConnectionStatus>(Connecting()));
         final newer = container.read(connectionNotifierProvider);
         release.complete();
         await failed;
         expect(identical(container.read(connectionNotifierProvider), newer), isTrue);
+        expect(connection.disconnects, 1);
         expect(connection.requests, [(operation: 'connect', profileId: profile.id)]);
       });
+
+      test('$initialName start throw after target replacement$eventName cannot clean up the newer intent', () async {
+        final notifier = await openStartState(initialError: initialError);
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        final failure = StateError('synthetic late start failure after target replacement');
+        connection.entered = entered;
+        connection.release = release.future;
+        connection.requestException = failure;
+        final retry = notifier.retryForProfile(profile.id);
+        final failed = expectLater(retry, throwsA(same(failure)));
+        await entered.future;
+        var newer = container.read(connectionNotifierProvider);
+        active.select(profile.copyWith(id: 'replacement-profile'));
+        await container.read(activeProfileProvider.future);
+        if (lateConnecting) {
+          await publishConnectionEvent(const AsyncData<ConnectionStatus>(Connecting()));
+          newer = container.read(connectionNotifierProvider);
+        }
+        release.complete();
+        await failed;
+        expect(identical(container.read(connectionNotifierProvider), newer), isTrue);
+        expect(container.read(activeProfileProvider).asData?.value?.id, 'replacement-profile');
+        expect(connection.requests, [(operation: 'connect', profileId: profile.id)]);
+      });
+    }
+
+    for (final terminal in <({String name, AsyncValue<ConnectionStatus> event})>[
+      (name: 'Connected', event: const AsyncData<ConnectionStatus>(Connected())),
+      (name: 'Disconnected', event: const AsyncData<ConnectionStatus>(Disconnected())),
+      (
+        name: 'AsyncError',
+        event: AsyncError<ConnectionStatus>(const ConnectionFailure.invalidConfig(), StackTrace.current),
+      ),
+    ]) {
+      for (final lateConnecting in [false, true]) {
+        final eventName = lateConnecting ? ' followed by Connecting' : '';
+        test('$initialName start throw preserves the already published ${terminal.name}$eventName state', () async {
+          final notifier = await openStartState(initialError: initialError);
+          final entered = Completer<void>();
+          final release = Completer<void>();
+          final failure = StateError('synthetic late start failure after terminal event');
+          connection.entered = entered;
+          connection.release = release.future;
+          connection.requestException = failure;
+          final retry = notifier.retryForProfile(profile.id);
+          final failed = expectLater(retry, throwsA(same(failure)));
+          await entered.future;
+          await publishConnectionEvent(terminal.event);
+          if (lateConnecting) await publishConnectionEvent(const AsyncData<ConnectionStatus>(Connecting()));
+          final newer = container.read(connectionNotifierProvider);
+          release.complete();
+          await failed;
+          expect(identical(container.read(connectionNotifierProvider), newer), isTrue);
+          expect(connection.requests, [(operation: 'connect', profileId: profile.id)]);
+        });
+      }
     }
   }
 

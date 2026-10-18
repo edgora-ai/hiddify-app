@@ -83,6 +83,16 @@ void main() {
     await mount(tester);
     await tester.ensureVisible(password());
     await tester.enterText(password(), 'submitted-password');
+    expect(container.read(provider).requireValue.draft['password'], 'submitted-password');
+    expect(container.read(provider).requireValue.isDirty, isTrue);
+    // Render the dirty state before tapping the previously disabled Save action.
+    await tester.pump();
+    final saveButton = find.ancestor(
+      of: find.text(t.common.save),
+      matching: find.byWidgetPredicate((widget) => widget is TextButton),
+    );
+    expect(tester.widget<TextButton>(saveButton).onPressed, isNotNull);
+    expect(saveButton.hitTestable(), findsOneWidget);
     expect(tester.testTextInput.hasAnyClients, isTrue);
     final submitted = NodeJson.deepCopyMap(container.read(provider).requireValue.draft);
     // Gate futures must originate in the real zone, just like the IO they gate.
@@ -97,12 +107,7 @@ void main() {
     try {
       final busy = await tester.runAsync(() async {
         // The real tap must create the save/DB future in this real async zone.
-        await tester.tap(
-          find.ancestor(
-            of: find.text(t.common.save),
-            matching: find.byWidgetPredicate((widget) => widget is TextButton),
-          ),
-        );
+        await tester.tap(saveButton);
         final operation = editor.lastSave;
         if (operation == null) throw TestFailure('Save tap did not start a node save');
         await waitForCheckpoint(

@@ -46,12 +46,13 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     });
 
     ref.listen(activeProfileProvider.select((value) => value.asData?.value), (previous, next) async {
+      _observedActiveProfileId = next?.id;
       if (previous == null) return;
       final shouldReconnect = next == null || previous.id != next.id;
       if (shouldReconnect) {
         await reconnect(next);
       }
-    });
+    }, fireImmediately: true);
     ref.watch(coreRestartSignalProvider);
 
     yield* _connectionRepo.watchConnectionStatus().doOnData((event) {
@@ -101,6 +102,8 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
   int _connectionIntentRevision = 0;
   int _pendingUnboundOperations = 0;
   bool _startedByUserIntent = false;
+  String? _observedActiveProfileId;
+  ({String profileId, int revision})? _pendingRetryStart;
 
   Future<void> _withConnectionIntent(Future<void> Function() operation) async {
     _connectionIntentRevision++;
@@ -112,30 +115,42 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     }
   }
 
-  Future<void> toggleConnection() => _withConnectionIntent(() async {
-    final haptic = ref.read(hapticServiceProvider.notifier);
-    if (state case AsyncError()) {
-      _startedByUserIntent = true;
-      await haptic.lightImpact();
-      await _connect();
-    } else if (state case AsyncData(:final value)) {
-      switch (value) {
-        case Disconnected():
-          _startedByUserIntent = true;
-          await haptic.lightImpact();
-          await ref.read(Preferences.startedByUser.notifier).update(true);
-          await _connect();
-        case Connected():
-          _startedByUserIntent = false;
-          // default:
-          await haptic.mediumImpact();
-          await ref.read(Preferences.startedByUser.notifier).update(false);
-          await _disconnect();
-        default:
-          loggy.warning("switching status, debounce");
-      }
+  Future<void> toggleConnection() async {
+    final pendingStart = _pendingRetryStart;
+    if (pendingStart != null &&
+        pendingStart.revision == _connectionIntentRevision &&
+        pendingStart.profileId == _observedActiveProfileId &&
+        (state is AsyncError<ConnectionStatus> || state.asData?.value is Disconnected)) {
+      // The gate already accepted this same Start. A duplicate must not cancel
+      // it by changing intent before its own _connect would be ignored.
+      loggy.debug('same-profile Start already accepted, ignoring duplicate');
+      return;
     }
-  });
+    await _withConnectionIntent(() async {
+      final haptic = ref.read(hapticServiceProvider.notifier);
+      if (state case AsyncError()) {
+        _startedByUserIntent = true;
+        await haptic.lightImpact();
+        await _connect();
+      } else if (state case AsyncData(:final value)) {
+        switch (value) {
+          case Disconnected():
+            _startedByUserIntent = true;
+            await haptic.lightImpact();
+            await ref.read(Preferences.startedByUser.notifier).update(true);
+            await _connect();
+          case Connected():
+            _startedByUserIntent = false;
+            // default:
+            await haptic.mediumImpact();
+            await ref.read(Preferences.startedByUser.notifier).update(false);
+            await _disconnect();
+          default:
+            loggy.warning("switching status, debounce");
+        }
+      }
+    });
+  }
 
   Future<void> reconnect(ProfileEntity? profile) => _withConnectionIntent(() async {
     if (state case AsyncData(:final value) when value == const Connected()) {
@@ -171,42 +186,63 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
       final canReload = initial.asData?.value is Connected;
       if (!canStart && !canReload) return false;
 
-      // Preferences also performs async IO. A selection change, manual stop or
-      // status transition during that wait must win over this pending retry.
-      final startedByUser = ref.read(Preferences.startedByUser.notifier);
-      _startedByUserIntent = true;
-      await startedByUser.update(true);
-      // A late preference write must not reinstate Start after a manual Stop.
-      // Reconcile only this flag to the latest explicit intent, never replay a
-      // connection request. Further user actions during IO still take priority.
-      var preferenceRevision = intentRevision;
-      while (preferenceRevision != _connectionIntentRevision) {
-        preferenceRevision = _connectionIntentRevision;
-        await startedByUser.update(_startedByUserIntent);
-      }
-      if (intentRevision != _connectionIntentRevision || _pendingUnboundOperations != 0 || state != initial)
-        return false;
-      active = ref.read(activeProfileProvider).asData?.value;
-      if (active == null || active.id != expectedProfileId) return false;
+      if (canStart) _pendingRetryStart = (profileId: expectedProfileId, revision: intentRevision);
+      try {
+        // Preferences also performs async IO. A selection change, manual stop or
+        // status transition during that wait must win over this pending retry.
+        final startedByUser = ref.read(Preferences.startedByUser.notifier);
+        _startedByUserIntent = true;
+        await startedByUser.update(true);
+        // A late preference write must not reinstate Start after a manual Stop.
+        // Reconcile only this flag to the latest explicit intent, never replay a
+        // connection request. Further user actions during IO still take priority.
+        var preferenceRevision = intentRevision;
+        while (preferenceRevision != _connectionIntentRevision) {
+          preferenceRevision = _connectionIntentRevision;
+          await startedByUser.update(_startedByUserIntent);
+        }
+        if (intentRevision != _connectionIntentRevision || _pendingUnboundOperations != 0 || state != initial) {
+          return false;
+        }
+        active = ref.read(activeProfileProvider).asData?.value;
+        if (active == null || active.id != expectedProfileId) return false;
 
-      final dialogs = ref.read(dialogNotifierProvider.notifier);
-      final t = ref.read(translationsProvider).requireValue;
-      final disableMemoryLimit = ref.read(Preferences.disableMemoryLimit);
-      if (canStart) state = const AsyncData(Connecting());
-      // Do not call another public SingleCall entry while holding this gate.
-      final result =
-          await (canStart
-                  ? _connectionRepo.connect(active, disableMemoryLimit)
-                  : _connectionRepo.reconnect(active, disableMemoryLimit))
-              .run();
-      // The active-profile listener increments this revision too. Avoid ref
-      // reads after core IO: a failed start can invalidate this notifier.
-      if (intentRevision != _connectionIntentRevision) return false;
-      return result.match((error) async {
-        state = AsyncError(error, StackTrace.current);
-        await dialogs.showCustomAlertFromErr(error.present(t));
-        return false;
-      }, (_) async => true);
+        final dialogs = ref.read(dialogNotifierProvider.notifier);
+        final t = ref.read(translationsProvider).requireValue;
+        final disableMemoryLimit = ref.read(Preferences.disableMemoryLimit);
+        // Keep the published AsyncValue itself as the ownership token, not just
+        // an equal Connecting status that a later operation could also publish.
+        final starting = canStart ? AsyncData<ConnectionStatus>(const Connecting()) : null;
+        if (starting != null) state = starting;
+        final ownedStarting = canStart ? state : null;
+        try {
+          // Do not call another public SingleCall entry while holding this gate.
+          final result =
+              await (canStart
+                      ? _connectionRepo.connect(active, disableMemoryLimit)
+                      : _connectionRepo.reconnect(active, disableMemoryLimit))
+                  .run();
+          // The active-profile listener increments this revision too. Avoid ref
+          // reads after core IO: a failed start can invalidate this notifier.
+          if (intentRevision != _connectionIntentRevision) return false;
+          return result.match((error) async {
+            state = AsyncError(error, StackTrace.current);
+            await dialogs.showCustomAlertFromErr(error.present(t));
+            return false;
+          }, (_) async => true);
+        } catch (error, stackTrace) {
+          if (ownedStarting != null &&
+              intentRevision == _connectionIntentRevision &&
+              _observedActiveProfileId == expectedProfileId &&
+              state.asData?.value is Connecting &&
+              identical(state, ownedStarting)) {
+            state = AsyncError(error, stackTrace);
+          }
+          rethrow;
+        }
+      } finally {
+        if (canStart) _pendingRetryStart = null;
+      }
     }, onIgnored: () => false);
   }
 

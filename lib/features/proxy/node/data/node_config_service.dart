@@ -4,6 +4,7 @@ import 'package:dartx/dartx.dart';
 import 'package:fpdart/fpdart.dart';
 import 'package:hiddify/features/profile/data/profile_repository.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
+import 'package:hiddify/features/profile/model/profile_failure.dart';
 import 'package:hiddify/features/proxy/node/data/node_json_adapter.dart';
 import 'package:hiddify/features/proxy/node/data/node_protocol_templates.dart';
 import 'package:hiddify/features/proxy/node/data/node_reference_sync.dart';
@@ -31,7 +32,7 @@ class NodeListEntry {
 
 /// Single orchestration point for node persistence (add/edit/delete).
 ///
-/// All writes go through [ProfileRepository.offlineUpdate]; this service adds
+/// All writes go through the repository's checked commit boundary; this service adds
 /// node-level locating, local-only gating, snapshot conflict detection and
 /// reference syncing. It never touches files directly and never calls core.
 ///
@@ -41,21 +42,6 @@ class NodeConfigService {
   NodeConfigService(this._profilesRepo);
 
   final ProfileRepository _profilesRepo;
-
-  // Per-profile in-memory write locks to serialize concurrent saves.
-  final _locks = <String, Future<void>>{};
-
-  Future<T> _locked<T>(String profileId, Future<T> Function() fn) {
-    final prev = _locks[profileId] ?? Future.value();
-    final current = prev.then((_) => fn());
-    final gate = current.then((_) {}, onError: (_) {});
-    _locks[profileId] = gate;
-    gate.whenComplete(() {
-      // Only remove if no newer save chained behind us.
-      if (identical(_locks[profileId], gate)) _locks.remove(profileId);
-    });
-    return current;
-  }
 
   // ------------------------------------------------------------ read helpers
 
@@ -70,27 +56,22 @@ class NodeConfigService {
 
   /// Loads the raw config: the untouched file string plus the parsed JSON.
   /// The raw string is the conflict-detection snapshot; never re-encode it.
-  Future<Either<NodeFailure, ({String rawContent, Map<String, dynamic> config})>> loadConfig(
-    String profileId,
-  ) async {
+  Future<Either<NodeFailure, ({String rawContent, Map<String, dynamic> config})>> loadConfig(String profileId) async {
     final result = await _profilesRepo.getRawConfig(profileId).run();
-    return result.match(
-      (l) => Left(NodeFailure.unexpected(l)),
-      (content) {
-        try {
-          final decoded = jsonDecode(content);
-          if (decoded is! Map<String, dynamic>) {
-            return const Left(NodeFailure.invalidStructure('root is not an object'));
-          }
-          if (decoded['outbounds'] != null && decoded['outbounds'] is! List) {
-            return const Left(NodeFailure.invalidStructure('outbounds is not an array'));
-          }
-          return Right((rawContent: content, config: decoded));
-        } catch (e) {
-          return Left(NodeFailure.unexpected(e));
+    return result.match((l) => Left(NodeFailure.unexpected(l)), (content) {
+      try {
+        final decoded = jsonDecode(content);
+        if (decoded is! Map<String, dynamic>) {
+          return const Left(NodeFailure.invalidStructure('root is not an object'));
         }
-      },
-    );
+        if (decoded['outbounds'] != null && decoded['outbounds'] is! List) {
+          return const Left(NodeFailure.invalidStructure('outbounds is not an array'));
+        }
+        return Right((rawContent: content, config: decoded));
+      } catch (e) {
+        return Left(NodeFailure.unexpected(e));
+      }
+    });
   }
 
   /// Lists entries from a parsed config. Rows with malformed shapes or
@@ -164,52 +145,61 @@ class NodeConfigService {
     required String profileId,
     required String expectedRawContent,
     required Either<NodeFailure, void> Function(Map<String, dynamic> config) mutate,
-  }) {
-    return _locked(profileId, () async {
-      // 1. Re-read profile: must exist and still be local.
-      final profileEither = await loadProfile(profileId);
-      if (profileEither.isLeft()) {
-        return Left<NodeFailure, ProfileEntity>(profileEither.getLeft().toNullable()!);
-      }
-      final profile = profileEither.getRight().toNullable()!;
-      if (profile is! LocalProfileEntity) return const Left(NodeFailure.readOnly());
+  }) async {
+    // 1. Re-read profile: must exist and still be local.
+    final profileEither = await loadProfile(profileId);
+    if (profileEither.isLeft()) {
+      return Left<NodeFailure, ProfileEntity>(profileEither.getLeft().toNullable()!);
+    }
+    final profile = profileEither.getRight().toNullable()!;
+    if (profile is! LocalProfileEntity) return const Left(NodeFailure.readOnly());
 
-      // 2. Re-read raw content and compare with the editor snapshot.
-      final rawEither = await _profilesRepo.getRawConfig(profileId).run();
-      if (rawEither.isLeft()) {
-        return Left<NodeFailure, ProfileEntity>(NodeFailure.unexpected(rawEither.getLeft().toNullable()));
+    // 2. Re-read raw content and compare with the editor snapshot.
+    final rawEither = await _profilesRepo.getRawConfig(profileId).run();
+    if (rawEither.isLeft()) {
+      return Left<NodeFailure, ProfileEntity>(NodeFailure.unexpected(rawEither.getLeft().toNullable()));
+    }
+    final freshContent = rawEither.getRight().toNullable()!;
+    if (freshContent != expectedRawContent) return const Left(NodeFailure.configChanged());
+
+    // 3. Parse + mutate a copy.
+    Map<String, dynamic> config;
+    try {
+      final decoded = jsonDecode(freshContent);
+      if (decoded is! Map<String, dynamic>) {
+        return const Left(NodeFailure.invalidStructure('root is not an object'));
       }
-      final freshContent = rawEither.getRight().toNullable()!;
-      if (freshContent != expectedRawContent) {
+      config = NodeJson.deepCopyMap(decoded);
+    } catch (e) {
+      return Left<NodeFailure, ProfileEntity>(NodeFailure.unexpected(e));
+    }
+    final Either<NodeFailure, void> mutateResult;
+    try {
+      mutateResult = mutate(config);
+    } on ArgumentError catch (error) {
+      // Reference sync can reject reserved targets before it changes anything.
+      // Surface the existing validation failure; never submit a partial copy.
+      return Left(NodeFailure.validationFailed(error.message?.toString() ?? error.toString()));
+    }
+    if (mutateResult.isLeft()) {
+      return Left<NodeFailure, ProfileEntity>(mutateResult.getLeft().toNullable()!);
+    }
+
+    // 4. Compare again under the repository's shared commit lock, held through
+    // the actual async file/DB write. The preflight read above is not a CAS.
+    final saveResult = await _profilesRepo
+        .commitConfig(profileId, jsonEncode(config), expectedRawContent: expectedRawContent)
+        .run();
+    if (saveResult.isLeft()) {
+      final err = saveResult.getLeft().toNullable()!;
+      if (err is ProfileUnexpectedFailure && err.error is ProfileCommitConflict) {
         return const Left(NodeFailure.configChanged());
       }
+      if (err is ProfileNotFoundFailure) return const Left(NodeFailure.notFound());
+      return Left<NodeFailure, ProfileEntity>(NodeFailure.validationFailed(err.toString()));
+    }
 
-      // 3. Parse + mutate a copy.
-      Map<String, dynamic> config;
-      try {
-        final decoded = jsonDecode(freshContent);
-        if (decoded is! Map<String, dynamic>) {
-          return const Left(NodeFailure.invalidStructure('root is not an object'));
-        }
-        config = NodeJson.deepCopyMap(decoded);
-      } catch (e) {
-        return Left<NodeFailure, ProfileEntity>(NodeFailure.unexpected(e));
-      }
-      final mutateResult = mutate(config);
-      if (mutateResult.isLeft()) {
-        return Left<NodeFailure, ProfileEntity>(mutateResult.getLeft().toNullable()!);
-      }
-
-      // 4. Persist via repository (core validates + writes the file).
-      final saveResult = await _profilesRepo.offlineUpdate(profile, jsonEncode(config)).run();
-      if (saveResult.isLeft()) {
-        final err = saveResult.getLeft().toNullable()!;
-        return Left<NodeFailure, ProfileEntity>(NodeFailure.validationFailed(err.toString()));
-      }
-
-      // 5. Re-read the saved entity.
-      return loadProfile(profileId);
-    });
+    return loadProfile(profileId);
   }
 
   /// Updates one outbound. When [newDraft] carries a different tag this is
@@ -220,6 +210,7 @@ class NodeConfigService {
     required String rawTag,
     required Map<String, dynamic> newDraft,
   }) {
+    final submittedDraft = NodeJson.deepCopyMap(newDraft);
     return _commit(
       profileId: profileId,
       expectedRawContent: expectedRawContent,
@@ -229,7 +220,7 @@ class NodeConfigService {
         final outbounds = config['outbounds'] as List;
         final index = outbounds.indexWhere((o) => o is Map<String, dynamic> && o['tag'] == rawTag);
 
-        final newTag = newDraft['tag'];
+        final newTag = submittedDraft['tag'];
         if (newTag is! String || newTag.isEmpty) {
           return const Left(NodeFailure.invalidStructure('missing tag'));
         }
@@ -238,20 +229,17 @@ class NodeConfigService {
             return const Left(NodeFailure.duplicateName());
           }
           final endpoints = config['endpoints'];
-          if (endpoints is List &&
-              endpoints.any((e) => e is Map<String, dynamic> && e['tag'] == newTag)) {
+          if (endpoints is List && endpoints.any((e) => e is Map<String, dynamic> && e['tag'] == newTag)) {
             return const Left(NodeFailure.duplicateName());
           }
           final check = NodeReferenceSync.check(config: config, tag: rawTag);
           if (check.hasBlockingRefs) {
-            return Left(NodeFailure.referenceConflict(
-              [...check.ruleTargets, ...check.patternRefs].join(', '),
-            ));
+            return Left(NodeFailure.referenceConflict([...check.ruleTargets, ...check.patternRefs].join(', ')));
           }
           // Sync refs while the old tag still exists, then replace.
           NodeReferenceSync.applyRename(config: config, oldTag: rawTag, newTag: newTag);
         }
-        outbounds[index] = newDraft;
+        outbounds[index] = submittedDraft;
         return const Right(null);
       },
     );
@@ -264,11 +252,13 @@ class NodeConfigService {
     required Map<String, dynamic> draft,
     required List<String> groupTags,
   }) {
+    final submittedDraft = NodeJson.deepCopyMap(draft);
+    final submittedGroups = List<String>.of(groupTags);
     return _commit(
       profileId: profileId,
       expectedRawContent: expectedRawContent,
       mutate: (config) {
-        final tag = draft['tag'];
+        final tag = submittedDraft['tag'];
         if (tag is! String || tag.isEmpty) {
           return const Left(NodeFailure.invalidStructure('missing tag'));
         }
@@ -287,8 +277,8 @@ class NodeConfigService {
         if (endpoints is List && endpoints.any((e) => e is Map<String, dynamic> && e['tag'] == tag)) {
           return const Left(NodeFailure.duplicateName());
         }
-        outbounds.add(draft);
-        for (final groupTag in groupTags) {
+        outbounds.add(submittedDraft);
+        for (final groupTag in submittedGroups) {
           for (final o in outbounds.whereType<Map<String, dynamic>>()) {
             if (o['tag'] != groupTag) continue;
             final members = o['outbounds'];
@@ -315,14 +305,14 @@ class NodeConfigService {
 
         final check = NodeReferenceSync.check(config: config, tag: rawTag);
         if (check.hasBlockingRefs) {
-          return Left(NodeFailure.referenceConflict(
-            [...check.ruleTargets, ...check.patternRefs].join(', '),
-          ));
+          return Left(NodeFailure.referenceConflict([...check.ruleTargets, ...check.patternRefs].join(', ')));
         }
         if (check.finalRoute || check.detours.isNotEmpty) {
-          return Left(NodeFailure.referenceConflict(
-            [if (check.finalRoute) 'route.final', ...check.detours.map((d) => 'detour:$d')].join(', '),
-          ));
+          return Left(
+            NodeFailure.referenceConflict(
+              [if (check.finalRoute) 'route.final', ...check.detours.map((d) => 'detour:$d')].join(', '),
+            ),
+          );
         }
         if (check.defaults.isNotEmpty) {
           return Left(NodeFailure.referenceConflict('default:${check.defaults.join(',')}'));

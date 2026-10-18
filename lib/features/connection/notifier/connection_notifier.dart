@@ -97,18 +97,36 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     await _connect();
   }
 
-  Future<void> toggleConnection() async {
+  // Invalidates a pending profile-bound action when the user changes intent.
+  int _connectionIntentRevision = 0;
+  int _pendingUnboundOperations = 0;
+  bool _startedByUserIntent = false;
+
+  Future<void> _withConnectionIntent(Future<void> Function() operation) async {
+    _connectionIntentRevision++;
+    _pendingUnboundOperations++;
+    try {
+      await operation();
+    } finally {
+      _pendingUnboundOperations--;
+    }
+  }
+
+  Future<void> toggleConnection() => _withConnectionIntent(() async {
     final haptic = ref.read(hapticServiceProvider.notifier);
     if (state case AsyncError()) {
+      _startedByUserIntent = true;
       await haptic.lightImpact();
       await _connect();
     } else if (state case AsyncData(:final value)) {
       switch (value) {
         case Disconnected():
+          _startedByUserIntent = true;
           await haptic.lightImpact();
           await ref.read(Preferences.startedByUser.notifier).update(true);
           await _connect();
         case Connected():
+          _startedByUserIntent = false;
           // default:
           await haptic.mediumImpact();
           await ref.read(Preferences.startedByUser.notifier).update(false);
@@ -117,10 +135,11 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
           loggy.warning("switching status, debounce");
       }
     }
-  }
+  });
 
-  Future<void> reconnect(ProfileEntity? profile) async {
+  Future<void> reconnect(ProfileEntity? profile) => _withConnectionIntent(() async {
     if (state case AsyncData(:final value) when value == const Connected()) {
+      _startedByUserIntent = profile != null;
       if (profile == null) {
         loggy.info("no active profile, disconnecting");
         return _disconnect();
@@ -135,23 +154,78 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
             .showCustomAlertFromErr(err.present(ref.read(translationsProvider).requireValue));
       }).run();
     }
+  });
+
+  /// Explicit editor apply/retry, bound to one saved profile. True means that
+  /// this operation sent a successful repository request, not network reachability.
+  Future<bool> retryForProfile(String expectedProfileId) {
+    final intentRevision = _connectionIntentRevision;
+    return _singleStart.run<bool>(() async {
+      if (_pendingUnboundOperations != 0) return false;
+      await ref.read(activeProfileProvider.future);
+      if (intentRevision != _connectionIntentRevision || _pendingUnboundOperations != 0) return false;
+      var active = ref.read(activeProfileProvider).asData?.value;
+      if (active?.id != expectedProfileId) return false;
+      final initial = state;
+      final canStart = initial is AsyncError<ConnectionStatus> || initial.asData?.value is Disconnected;
+      final canReload = initial.asData?.value is Connected;
+      if (!canStart && !canReload) return false;
+
+      // Preferences also performs async IO. A selection change, manual stop or
+      // status transition during that wait must win over this pending retry.
+      final startedByUser = ref.read(Preferences.startedByUser.notifier);
+      _startedByUserIntent = true;
+      await startedByUser.update(true);
+      // A late preference write must not reinstate Start after a manual Stop.
+      // Reconcile only this flag to the latest explicit intent, never replay a
+      // connection request. Further user actions during IO still take priority.
+      var preferenceRevision = intentRevision;
+      while (preferenceRevision != _connectionIntentRevision) {
+        preferenceRevision = _connectionIntentRevision;
+        await startedByUser.update(_startedByUserIntent);
+      }
+      if (intentRevision != _connectionIntentRevision || _pendingUnboundOperations != 0 || state != initial)
+        return false;
+      active = ref.read(activeProfileProvider).asData?.value;
+      if (active == null || active.id != expectedProfileId) return false;
+
+      final dialogs = ref.read(dialogNotifierProvider.notifier);
+      final t = ref.read(translationsProvider).requireValue;
+      final disableMemoryLimit = ref.read(Preferences.disableMemoryLimit);
+      if (canStart) state = const AsyncData(Connecting());
+      // Do not call another public SingleCall entry while holding this gate.
+      final result =
+          await (canStart
+                  ? _connectionRepo.connect(active, disableMemoryLimit)
+                  : _connectionRepo.reconnect(active, disableMemoryLimit))
+              .run();
+      // The active-profile listener increments this revision too. Avoid ref
+      // reads after core IO: a failed start can invalidate this notifier.
+      if (intentRevision != _connectionIntentRevision) return false;
+      return result.match((error) async {
+        state = AsyncError(error, StackTrace.current);
+        await dialogs.showCustomAlertFromErr(error.present(t));
+        return false;
+      }, (_) async => true);
+    }, onIgnored: () => false);
   }
 
-  Future<void> abortConnection() async {
+  Future<void> abortConnection() => _withConnectionIntent(() async {
     if (state case AsyncData(:final value)) {
       switch (value) {
         case Connected() || Connecting():
+          _startedByUserIntent = false;
           loggy.debug("aborting connection");
           await _disconnect();
         default:
       }
     }
-  }
+  });
 
   final _singleStart = SingleCall();
 
   Future<void> _connect() async {
-    _singleStart.run(
+    await _singleStart.run<void>(
       () async {
         await _connectThrottled();
       },
@@ -212,8 +286,8 @@ bool serviceRunning(Ref ref) {
 class SingleCall {
   bool _running = false;
 
-  Future<T> run<T>(Future<T> Function() task, {required T onIgnored}) async {
-    if (_running) return onIgnored;
+  Future<T> run<T>(Future<T> Function() task, {required T Function() onIgnored}) async {
+    if (_running) return onIgnored();
 
     _running = true;
     try {
@@ -225,6 +299,4 @@ class SingleCall {
 }
 
 /// Whether the core is hot reloading; only the connection button shows it.
-final hotReloadingProvider = StreamProvider<bool>(
-  (ref) => ref.watch(connectionRepositoryProvider).watchHotReloading(),
-);
+final hotReloadingProvider = StreamProvider<bool>((ref) => ref.watch(connectionRepositoryProvider).watchHotReloading());

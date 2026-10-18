@@ -5,7 +5,7 @@ part 'node_editor_state.freezed.dart';
 
 /// Save/apply phase. Persistence and core-apply are reported separately so
 /// the UI can distinguish "saved" from "saved and applied".
-enum NodeSavePhase { idle, saving, saved, applying, applied, applyFailed, saveFailed }
+enum NodeSavePhase { idle, saving, saved, applying, applied, applyFailed, saveFailed, conflict }
 
 @freezed
 class NodeEditorState with _$NodeEditorState {
@@ -28,6 +28,17 @@ class NodeEditorState with _$NodeEditorState {
   bool get isDirty => !_mapsEqual(draft, originalDraft) || (isNew && selectedGroups.isNotEmpty);
 
   bool get isSaving => savePhase == NodeSavePhase.saving || savePhase == NodeSavePhase.applying;
+
+  bool get needsReload => savePhase == NodeSavePhase.conflict;
+
+  // Persistence has finished in these phases. Retrying applies that exact saved
+  // draft; starting another edit requires a new editor snapshot.
+  bool get hasSaved => switch (savePhase) {
+    NodeSavePhase.saved || NodeSavePhase.applying || NodeSavePhase.applied || NodeSavePhase.applyFailed => true,
+    _ => false,
+  };
+
+  bool get canEdit => !isSaving && !hasSaved;
 
   static bool _mapsEqual(Map<String, dynamic> a, Map<String, dynamic> b) {
     if (identical(a, b)) return true;

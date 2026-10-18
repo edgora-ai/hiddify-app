@@ -18,6 +18,10 @@ part 'profile_details_notifier.g.dart';
 class ProfileDetailsNotifier extends _$ProfileDetailsNotifier with AppLogger {
   ProfileRepository get _profilesRepo => ref.read(profileRepositoryProvider).requireValue;
 
+  String? _rawContentSnapshot;
+  String? _displayContentSnapshot;
+  UserOverride? _originalUserOverride;
+
   @override
   Future<ProfileDetailsState> build(String id) async {
     final prof = (await _profilesRepo.getById(id).run()).match((l) => throw l, (prof) {
@@ -28,40 +32,22 @@ class ProfileDetailsNotifier extends _$ProfileDetailsNotifier with AppLogger {
       }
       return prof;
     });
-    var profContent = "";
+    // JSON edits own the complete raw document, not an outbounds-only projection.
+    // Keep the existing generated editor for non-JSON subscriptions, but its
+    // untouched display is never a replacement config on an override-only save.
+    final rawContent = (await _profilesRepo.getRawConfig(id).run()).match((l) => throw l, (content) => content);
+    var profContent = rawContent;
     try {
-      profContent = (await _profilesRepo.generateConfig(id).run()).match(
-        (l) => throw Exception('Failed to generate config: $l'),
-        (content) => content,
-      );
-    } catch (e, st) {
-      loggy.error('Error generating config for profile $id', e, st);
-      // Optionally, you can set profContent to an empty string or keep the original content
-      profContent = await _profilesRepo.getRawConfig(id).run().then((e) => e.getOrElse((f) => ""));
+      jsonDecode(rawContent);
+    } on FormatException {
+      profContent = (await _profilesRepo.generateConfig(id).run()).match((failure) {
+        loggy.warning('could not generate profile editor config', failure);
+        return rawContent;
+      }, (content) => content);
     }
-    try {
-      final jsonObject = jsonDecode(profContent);
-      final List<Map<String, dynamic>> outbounds = [];
-      if (jsonObject is Map<String, dynamic> && jsonObject['outbounds'] is List) {
-        for (final outbound in jsonObject['outbounds'] as List<dynamic>) {
-          if (outbound is Map<String, dynamic> &&
-              outbound['type'] != null &&
-              !['selector', 'urltest', 'dns', 'block'].contains(outbound['type']) &&
-              !['direct', 'bypass', 'direct-fragment'].contains(outbound['tag'])) {
-            outbounds.add(outbound);
-          }
-        }
-      } else {
-        // print('No outbounds found in the config');
-      }
-      // ignore: avoid_dynamic_calls
-      final endpoints = jsonObject['endpoints'] as List? ?? [];
-      profContent = '{"outbounds": ${json.encode(outbounds)},"endpoints":${json.encode(endpoints)} }';
-      loggy.info(profContent);
-    } catch (e, st) {
-      loggy.error('Error parsing profile-content JSON', e, st);
-      // rethrow;
-    }
+    _rawContentSnapshot = rawContent;
+    _displayContentSnapshot = profContent;
+    _originalUserOverride = prof.userOverride;
     return ProfileDetailsState(
       loadingState: const AsyncData(null),
       profile: prof,
@@ -73,15 +59,20 @@ class ProfileDetailsNotifier extends _$ProfileDetailsNotifier with AppLogger {
   Future<T?> doAsync<T>(Future<T> Function() operation) async {
     if (state case AsyncData(value: final ProfileDetailsState data)) {
       state = AsyncData(data.copyWith(loadingState: const AsyncLoading()));
-      final T? result = await operation();
-      state = AsyncData(data.copyWith(loadingState: const AsyncData(null)));
-      return result;
+      try {
+        return await operation();
+      } finally {
+        if (state case AsyncData(value: final current)) {
+          state = AsyncData(current.copyWith(loadingState: const AsyncData(null)));
+        }
+      }
     }
     return null;
   }
 
   void setUserOverride(UserOverride userOverride) {
     if (state case AsyncData(value: final ProfileDetailsState data)) {
+      if (data.isLoading) return;
       state = AsyncData(
         data.copyWith(profile: data.profile.copyWith(userOverride: userOverride), isDetailsChanged: true),
       );
@@ -90,6 +81,7 @@ class ProfileDetailsNotifier extends _$ProfileDetailsNotifier with AppLogger {
 
   void setContent(String configContent) {
     if (state case AsyncData(value: final ProfileDetailsState data)) {
+      if (data.isLoading) return;
       state = AsyncData(data.copyWith(configContent: configContent, isDetailsChanged: true));
     }
   }
@@ -102,16 +94,38 @@ class ProfileDetailsNotifier extends _$ProfileDetailsNotifier with AppLogger {
       success =
           await doAsync<bool>(() async {
             final t = await ref.read(translationsProvider.future);
-            return (await _profilesRepo.offlineUpdate(value.profile, value.configContent).run()).match(
-              (l) async {
+            final contentChanged = value.configContent != _displayContentSnapshot;
+            final result = await _profilesRepo
+                .commitDetails(
+                  value.profile,
+                  expectedUserOverride: _originalUserOverride,
+                  content: contentChanged ? value.configContent : null,
+                  expectedRawContent: contentChanged ? _rawContentSnapshot : null,
+                )
+                .run();
+            return result.match(
+              (failure) async {
+                final conflict = failure is ProfileUnexpectedFailure && failure.error is ProfileCommitConflict;
                 await ref
                     .read(dialogNotifierProvider.notifier)
                     .showCustomAlertFromErr(
-                      t.presentError(l, action: t.pages.profiles.msg.update.failureNamed(name: value.profile.name)),
+                      conflict
+                          ? (type: t.errors.nodes.configChanged, message: null)
+                          : t.presentError(
+                              failure,
+                              action: t.pages.profiles.msg.update.failureNamed(name: value.profile.name),
+                            ),
                     );
                 return false;
               },
-              (r) {
+              (_) {
+                // Only the submitted values become the next comparison base.
+                _originalUserOverride = value.profile.userOverride;
+                if (contentChanged) {
+                  _rawContentSnapshot = value.configContent;
+                  _displayContentSnapshot = value.configContent;
+                }
+                state = AsyncData(value.copyWith(isDetailsChanged: false));
                 ref.read(inAppNotificationControllerProvider).showSuccessToast(t.pages.profiles.msg.update.success);
                 return true;
               },

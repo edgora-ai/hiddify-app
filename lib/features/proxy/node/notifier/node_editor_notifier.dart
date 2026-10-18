@@ -65,7 +65,7 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
   /// Applies a JSON-path write to the draft and marks dirty.
   void setPath(List<String> path, dynamic value) {
     final data = _data;
-    if (data == null) return;
+    if (data == null || !data.canEdit) return;
     final draft = NodeJson.deepCopyMap(data.draft);
     NodeJson.putPath(draft, path, value);
     // Clear the field error for the edited leaf (best-effort by last segment).
@@ -76,7 +76,7 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
   /// Applies a TLS mode selection (none/tls/reality) to the draft.
   void setTlsMode(String mode) {
     final data = _data;
-    if (data == null) return;
+    if (data == null || !data.canEdit) return;
     final draft = NodeJson.deepCopyMap(data.draft);
     NodeJson.applyTlsMode(draft, mode);
     state = AsyncData(data.copyWith(draft: draft));
@@ -85,16 +85,14 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
   /// Switches protocol for a new node (resets the draft skeleton).
   void switchProtocol(String protocol, {required String keepName}) {
     final data = _data;
-    if (data == null || !data.isNew) return;
+    if (data == null || !data.canEdit || !data.isNew) return;
     final draft = NodeProtocolTemplates.create(protocol, keepName);
-    state = AsyncData(
-      data.copyWith(draft: draft, originalDraft: NodeJson.deepCopyMap(draft), fieldErrors: {}),
-    );
+    state = AsyncData(data.copyWith(draft: draft, originalDraft: NodeJson.deepCopyMap(draft), fieldErrors: {}));
   }
 
   void toggleGroup(String groupTag, bool selected) {
     final data = _data;
-    if (data == null) return;
+    if (data == null || !data.canEdit) return;
     final selectedGroups = List<String>.of(data.selectedGroups);
     if (selected) {
       if (!selectedGroups.contains(groupTag)) selectedGroups.add(groupTag);
@@ -107,7 +105,7 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
   /// Validates the whole draft; returns true when clean.
   bool validate(TranslationsEn t) {
     final data = _data;
-    if (data == null) return false;
+    if (data == null || !data.canEdit) return false;
     final errors = <String, String>{};
     final d = data.draft;
     final type = d['type'] as String? ?? '';
@@ -190,25 +188,28 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
   /// the form keeps user input on failure.
   Future<NodeSaveResult> save(TranslationsEn t) async {
     final data = _data;
-    if (data == null) return const NodeSaveResult.aborted();
-    if (data.isSaving) return const NodeSaveResult.aborted();
+    if (data == null || !data.canEdit) return const NodeSaveResult.aborted();
+    if (data.needsReload) return const NodeSaveResult.failed(NodeFailure.configChanged());
     if (!validate(t)) return const NodeSaveResult.invalid();
 
-    state = AsyncData(data.copyWith(savePhase: NodeSavePhase.saving, saveError: null));
+    // Capture D0 once. Only this submitted draft can become the saved baseline.
+    final submittedDraft = NodeJson.deepCopyMap(data.draft);
+    final submittedGroups = List<String>.of(data.selectedGroups);
+    state = AsyncData(_data!.copyWith(savePhase: NodeSavePhase.saving, saveError: null));
     final service = ref.read(nodeConfigServiceProvider);
 
     final eitherResult = data.isNew
         ? await service.addNode(
             profileId: data.profile.id,
             expectedRawContent: data.rawContentSnapshot,
-            draft: data.draft,
-            groupTags: data.selectedGroups,
+            draft: submittedDraft,
+            groupTags: submittedGroups,
           )
         : await service.updateNode(
             profileId: data.profile.id,
             expectedRawContent: data.rawContentSnapshot,
             rawTag: data.rawTag!,
-            newDraft: data.draft,
+            newDraft: submittedDraft,
           );
 
     if (eitherResult.isLeft()) {
@@ -216,44 +217,57 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
       final cur = _data;
       if (cur != null) {
         state = AsyncData(
-          cur.copyWith(savePhase: NodeSavePhase.saveFailed, saveError: failure.present(t).type),
+          cur.copyWith(
+            savePhase: failure is NodeConfigChanged ? NodeSavePhase.conflict : NodeSavePhase.saveFailed,
+            saveError: failure.present(t).type,
+          ),
         );
       }
-      // Refresh snapshot info on conflict so a retry compares correctly.
-      if (failure is NodeConfigChanged) {
-        _refreshSnapshot();
-      }
+      // Keep both the draft and its original comparison snapshot on conflict.
+      // Another Save cannot authorize stale credentials; only explicit reload can.
       return NodeSaveResult.failed(failure);
     }
 
+    final current = _data;
+    if (current == null) return const NodeSaveResult.aborted();
     state = AsyncData(
-      _data!.copyWith(
-        savePhase: NodeSavePhase.saved,
-        originalDraft: NodeJson.deepCopyMap(_data!.draft),
-        rawTag: _data!.isNew ? NodeJson.asString(_data!.draft['tag']) : _data!.rawTag,
+      current.copyWith(
+        // Stay busy across the active-profile lookup and possible apply step.
+        originalDraft: NodeJson.deepCopyMap(submittedDraft),
+        rawTag: NodeJson.asString(submittedDraft['tag']),
         isNew: false,
       ),
     );
-    // Keep the nodes list fresh.
     ref.invalidate(profileNodesNotifierProvider(data.profile.id));
 
-    // Apply to the running core when this is the active, connected profile.
-    final shouldApply = await _shouldApply(data.profile.id);
-    if (!shouldApply) return const NodeSaveResult.saved();
+    final bool shouldApply;
+    try {
+      shouldApply = await _shouldApply(data.profile.id);
+    } catch (error, stackTrace) {
+      loggy.error('could not determine saved profile apply target', error, stackTrace);
+      state = AsyncData(_data!.copyWith(savePhase: NodeSavePhase.applyFailed, saveError: t.presentShortError(error)));
+      return const NodeSaveResult.applyFailed();
+    }
+    if (!shouldApply) {
+      state = AsyncData(_data!.copyWith(savePhase: NodeSavePhase.saved));
+      return const NodeSaveResult.saved();
+    }
     return _apply(data.profile.id, t);
   }
 
   /// Retries only the apply step (config already saved).
   Future<NodeSaveResult> retryApply(TranslationsEn t) async {
     final data = _data;
-    if (data == null) return const NodeSaveResult.aborted();
+    if (data == null || data.isSaving || data.isDirty || data.savePhase != NodeSavePhase.applyFailed) {
+      return const NodeSaveResult.aborted();
+    }
     return _apply(data.profile.id, t);
   }
 
   Future<bool> _shouldApply(String profileId) async {
     final active = await ref.read(activeProfileProvider.future);
     if (active?.id != profileId) return false;
-    final status = ref.read(connectionNotifierProvider).valueOrNull;
+    final status = ref.read(connectionNotifierProvider).asData?.value;
     return status is Connected;
   }
 
@@ -262,36 +276,39 @@ class NodeEditorNotifier extends _$NodeEditorNotifier with AppLogger {
     if (data == null) return const NodeSaveResult.aborted();
     state = AsyncData(data.copyWith(savePhase: NodeSavePhase.applying));
 
-    final active = await ref.read(activeProfileProvider.future);
-    await ref.read(connectionNotifierProvider.notifier).reconnect(active);
+    Object? error;
+    var requested = false;
+    try {
+      requested = await ref.read(connectionNotifierProvider.notifier).retryForProfile(profileId);
+    } catch (err, stackTrace) {
+      loggy.error('failed to apply saved node config', err, stackTrace);
+      error = err;
+    }
 
-    final status = ref.read(connectionNotifierProvider).asData?.value;
-    final cur = _data;
-    if (status is Connected) {
-      if (cur != null) state = AsyncData(cur.copyWith(savePhase: NodeSavePhase.applied));
+    final connection = ref.read(connectionNotifierProvider);
+    final active = ref.read(activeProfileProvider).asData?.value;
+    final current = _data;
+    if (requested && connection.asData?.value is Connected && active?.id == profileId) {
+      if (current != null) state = AsyncData(current.copyWith(savePhase: NodeSavePhase.applied));
       return const NodeSaveResult.applied();
     }
-    final err = ref.read(connectionNotifierProvider).asError?.error;
-    if (cur != null) {
+    error ??= connection.asError?.error;
+    if (current != null) {
       state = AsyncData(
-        cur.copyWith(
+        current.copyWith(
           savePhase: NodeSavePhase.applyFailed,
-          saveError: err != null ? t.presentShortError(err) : t.pages.nodeEditor.messages.applyFailed,
+          saveError: error != null ? t.presentShortError(error) : t.pages.nodeEditor.messages.applyFailed,
         ),
       );
     }
     return const NodeSaveResult.applyFailed();
   }
 
-  Future<void> _refreshSnapshot() async {
-    final data = _data;
-    if (data == null) return;
-    final service = ref.read(nodeConfigServiceProvider);
-    final loaded = (await service.loadConfig(data.profile.id)).match((_) => null, (r) => r);
-    if (loaded == null) return;
-    // Keep the draft; only refresh the snapshot so the next save compares
-    // against the newest content (target re-checked at save time).
-    state = AsyncData(data.copyWith(rawContentSnapshot: loaded.rawContent));
+  /// The page asks before discarding dirty input. Rebuild loads the complete
+  /// latest node and snapshot together; a missing node stays missing.
+  void reload() {
+    if (_data?.isSaving ?? true) return;
+    ref.invalidateSelf();
   }
 }
 

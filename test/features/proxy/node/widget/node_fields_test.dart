@@ -93,6 +93,7 @@ Future<ProviderContainer> _mount(
   Map<String, dynamic> draft, {
   bool isNew = false,
   GlobalKey<FormState>? formKey,
+  AutovalidateMode autovalidateMode = AutovalidateMode.disabled,
 }) async {
   final rawTag = isNew ? null : _rawTag;
   final initial = NodeEditorState(
@@ -120,6 +121,7 @@ Future<ProviderContainer> _mount(
           body: SingleChildScrollView(
             child: Form(
               key: formKey,
+              autovalidateMode: autovalidateMode,
               child: _Fields(rawTag: rawTag),
             ),
           ),
@@ -138,6 +140,8 @@ Finder _textField(String label) => find.descendant(
 
 TextEditingController _controller(WidgetTester tester, String label) =>
     tester.widget<TextFormField>(_textField(label)).controller!;
+
+String? _formValue(WidgetTester tester, String label) => tester.state<FormFieldState<String>>(_textField(label)).value;
 
 Finder _dropdown(String label) => find.descendant(
   of: find.byWidgetPredicate((widget) => widget is NodeDropdownField<String> && widget.label == label),
@@ -286,13 +290,16 @@ void main() {
         'path': '/old',
         'headers': {'Host': 'old.example.com'},
       };
-    final container = await _mount(tester, original);
+    final container = await _mount(tester, original, autovalidateMode: AutovalidateMode.always);
     final notifier = container.read(nodeEditorNotifierProvider(_profileId, _rawTag).notifier);
     notifier.setPath(['transport'], {'type': 'httpupgrade', 'host': 'new.example.com', 'path': '/new'});
-    await tester.pump();
+    await tester.pumpAndSettle();
+    final draft = _data(container).draft;
     expect(tester.widget<DropdownButton<String>>(_dropdown(fields.transport)).value, 'httpupgrade');
     expect(_controller(tester, fields.hostHeader).text, 'new.example.com');
     expect(_controller(tester, fields.path).text, '/new');
+    expect(_formValue(tester, fields.hostHeader), NodeJson.getPath(draft, ['transport', 'host']));
+    expect(_formValue(tester, fields.path), NodeJson.getPath(draft, ['transport', 'path']));
     expect(original['transport'], {
       'type': 'ws',
       'path': '/old',
@@ -303,7 +310,7 @@ void main() {
 
   for (final protocol in ['vmess', 'vless']) {
     testWidgets('$protocol Generate UUID updates the existing controller and the draft', (tester) async {
-      final container = await _mount(tester, _draft(protocol));
+      final container = await _mount(tester, _draft(protocol), autovalidateMode: AutovalidateMode.always);
       final controller = _controller(tester, fields.uuid);
       expect(controller.text, _uuid);
       final button = find.text(t.pages.nodeEditor.actions.generateUuid);
@@ -315,6 +322,8 @@ void main() {
       expect(first, isNot(_uuid));
       expect(_controller(tester, fields.uuid), same(controller));
       expect(controller.text, first);
+      expect(_formValue(tester, fields.uuid), first);
+      expect(tester.takeException(), isNull);
 
       await tester.tap(button);
       await tester.pumpAndSettle();
@@ -323,6 +332,7 @@ void main() {
       expect(second, isNot(first));
       expect(controller.text, second);
       expect(_controller(tester, fields.uuid), same(controller));
+      expect(_formValue(tester, fields.uuid), second);
       expect(_data(container).originalDraft['uuid'], _uuid);
       expect(tester.takeException(), isNull);
     });
@@ -331,7 +341,7 @@ void main() {
   testWidgets('new-node protocol switch resets visible server and port without replacing their controllers', (
     tester,
   ) async {
-    final container = await _mount(tester, _draft('vmess'), isNew: true);
+    final container = await _mount(tester, _draft('vmess'), isNew: true, autovalidateMode: AutovalidateMode.always);
     final serverController = _controller(tester, fields.server);
     final portController = _controller(tester, fields.port);
     await tester.enterText(_textField(fields.server), 'edited.example.com');
@@ -350,6 +360,8 @@ void main() {
     expect(serverController.text, isEmpty);
     expect(portController.text, data.draft['server_port'].toString());
     expect(portController.text, '443');
+    expect(_formValue(tester, fields.server), data.draft['server']);
+    expect(_formValue(tester, fields.port), data.draft['server_port'].toString());
     expect(_controller(tester, fields.server), same(serverController));
     expect(_controller(tester, fields.port), same(portController));
     expect(tester.widget<DropdownButton<String>>(_dropdown(fields.protocol)).value, 'vless');

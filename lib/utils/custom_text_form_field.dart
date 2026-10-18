@@ -34,6 +34,7 @@ class CustomTextFormField extends StatefulWidget {
 
   /// Opt-in token for replacing the internally controlled text with
   /// [initialValue]. Change it only for programmatic edits, not input echoes.
+  /// Replacements run after the frame; later editing cancels a queued update.
   /// A null token retains the usual one-time initialValue semantics.
   /// An external [controller] is always authoritative and is never disposed.
   final Object? initialValueRevision;
@@ -57,42 +58,78 @@ class CustomTextFormField extends StatefulWidget {
 
 class _CustomTextFormFieldState extends State<CustomTextFormField> {
   TextEditingController? _ownedController;
+  int _syncGeneration = 0;
 
   TextEditingController get _controller => widget.controller ?? _ownedController!;
+
+  // Count every edit, including selection/IME changes and edit-then-revert.
+  // Comparing only the final text would let a stale callback overwrite those.
+  void _invalidatePendingSync() => _syncGeneration++;
+
+  void _disposeOwnedController() {
+    _ownedController?.removeListener(_invalidatePendingSync);
+    _ownedController?.dispose();
+    _ownedController = null;
+  }
 
   @override
   void initState() {
     super.initState();
     if (widget.controller == null) {
-      _ownedController = TextEditingController(text: widget.initialValue);
+      _ownedController = TextEditingController(text: widget.initialValue)..addListener(_invalidatePendingSync);
     }
   }
 
   @override
   void didUpdateWidget(covariant CustomTextFormField oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.controller != oldWidget.controller ||
+        widget.initialValueRevision != oldWidget.initialValueRevision ||
+        widget.initialValue != oldWidget.initialValue) {
+      _invalidatePendingSync();
+    }
     if (widget.controller != oldWidget.controller) {
       if (widget.controller == null) {
-        _ownedController = TextEditingController.fromValue(oldWidget.controller!.value);
+        _ownedController = TextEditingController.fromValue(oldWidget.controller!.value)
+          ..addListener(_invalidatePendingSync);
       } else {
-        _ownedController?.dispose();
-        _ownedController = null;
+        _disposeOwnedController();
       }
     }
     if (widget.controller == null &&
         widget.initialValueRevision != null &&
         widget.initialValueRevision != oldWidget.initialValueRevision &&
         _controller.text != widget.initialValue) {
-      _controller.value = TextEditingValue(
-        text: widget.initialValue,
-        selection: TextSelection.collapsed(offset: widget.initialValue.length),
-      );
+      final controller = _ownedController!;
+      final generation = _syncGeneration;
+      final revision = widget.initialValueRevision;
+      final text = widget.initialValue;
+      final before = controller.value;
+      // A controller notification also rebuilds an ancestor Form. Never send
+      // it from didUpdateWidget while that Form's descendant is being built.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            generation != _syncGeneration ||
+            widget.controller != null ||
+            !identical(_ownedController, controller) ||
+            widget.initialValueRevision != revision ||
+            widget.initialValue != text ||
+            controller.value != before ||
+            controller.text == text) {
+          return;
+        }
+        controller.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+      });
     }
   }
 
   @override
   void dispose() {
-    _ownedController?.dispose();
+    _invalidatePendingSync();
+    _disposeOwnedController();
     super.dispose();
   }
 

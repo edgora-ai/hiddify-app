@@ -14,6 +14,84 @@ class _CallerController extends TextEditingController {
   }
 }
 
+class _RevisionHost extends StatefulWidget {
+  const _RevisionHost({super.key});
+
+  @override
+  State<_RevisionHost> createState() => _RevisionHostState();
+}
+
+class _RevisionHostState extends State<_RevisionHost> {
+  String _initialValue = 'initial';
+  Object? _revision = 0;
+  TextEditingController? _externalController;
+  final validations = <String?>[];
+  final userChanges = <String>[];
+
+  void replace({required String text, required Object? revision, TextEditingController? controller}) {
+    setState(() {
+      _initialValue = text;
+      _revision = revision;
+      _externalController = controller;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(8),
+    child: CustomTextFormField(
+      initialValue: _initialValue,
+      initialValueRevision: _revision,
+      controller: _externalController,
+      maxLines: 1,
+      validator: (value) {
+        validations.add(value);
+        return value == 'initial' ? 'initial error' : null;
+      },
+      onChanged: (text) {
+        userChanges.add(text);
+        setState(() => _initialValue = text.trim());
+      },
+    ),
+  );
+}
+
+Future<GlobalKey<_RevisionHostState>> _mountRevisionHost(WidgetTester tester, {VoidCallback? onFormChanged}) async {
+  final key = GlobalKey<_RevisionHostState>();
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Form(
+          autovalidateMode: AutovalidateMode.always,
+          onChanged: onFormChanged,
+          child: _RevisionHost(key: key),
+        ),
+      ),
+    ),
+  );
+  // Seed a registered field's error, then let automatic validation observe
+  // programmatic changes made by the descendant without rebuilding the Form.
+  tester.state<FormState>(find.byType(Form)).validate();
+  await tester.pumpAndSettle();
+  return key;
+}
+
+Future<void> _queueRevisionAfterFrame(
+  WidgetTester tester,
+  GlobalKey<_RevisionHostState> key, {
+  required String text,
+  required Object? revision,
+}) async {
+  // Deliver a late widget update after this frame's callback list was taken.
+  // Its controller sync must wait for the next frame, allowing a newer update,
+  // edit, controller handoff or unmount to invalidate it before delivery.
+  tester.binding.addPostFrameCallback((_) {
+    key.currentState!.replace(text: text, revision: revision);
+    tester.binding.buildOwner!.buildScope(key.currentContext!);
+  });
+  await tester.pump();
+}
+
 Future<void> _mountField(
   WidgetTester tester, {
   required String initialValue,
@@ -37,6 +115,153 @@ Future<void> _mountField(
 EditableText _editable(WidgetTester tester) => tester.widget<EditableText>(find.byType(EditableText));
 
 void main() {
+  testWidgets('descendant revision sync safely notifies and revalidates an ancestor Form after build', (tester) async {
+    var formChanges = 0;
+    final host = await _mountRevisionHost(tester, onFormChanged: () => formChanges++);
+    final controller = _editable(tester).controller;
+    final editableState = tester.state<EditableTextState>(find.byType(EditableText));
+    expect(find.text('initial error'), findsOneWidget);
+
+    // Only the Form's descendant is dirty, matching the node-field failures.
+    host.currentState!.replace(text: 'replacement', revision: 1);
+    await tester.pumpAndSettle();
+    expect(_editable(tester).controller, same(controller));
+    expect(tester.state<EditableTextState>(find.byType(EditableText)), same(editableState));
+    expect(controller.text, 'replacement');
+    expect(tester.state<FormFieldState<String>>(find.byType(TextFormField)).value, 'replacement');
+    expect(host.currentState!.validations.last, 'replacement');
+    expect(host.currentState!.userChanges, isEmpty);
+    expect(formChanges, greaterThan(0));
+    expect(find.text('initial error'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  final replacements = <(String, String, Object?, String)>[
+    ('a newer revision', 'newest', 2, 'newest'),
+    ('a null revision', 'ignored', null, 'initial'),
+    ('a same-text revision', 'initial', 2, 'initial'),
+    ('an initialValue echo without a new revision', 'echo', 1, 'initial'),
+  ];
+  for (final (description, text, revision, expected) in replacements) {
+    testWidgets('$description invalidates a late queued revision without a stale write', (tester) async {
+      final host = await _mountRevisionHost(tester);
+      final controller = _editable(tester).controller;
+      controller.value = const TextEditingValue(
+        text: 'initial',
+        selection: TextSelection(baseOffset: 1, extentOffset: 3),
+        composing: TextRange(start: 1, end: 4),
+      );
+      final before = controller.value;
+      final writes = <String>[];
+      controller.addListener(() => writes.add(controller.text));
+      await _queueRevisionAfterFrame(tester, host, text: 'stale', revision: 1);
+      expect(controller.value, before);
+
+      host.currentState!.replace(text: text, revision: revision);
+      await tester.pumpAndSettle();
+      expect(_editable(tester).controller, same(controller));
+      expect(controller.text, expected);
+      expect(writes, expected == 'initial' ? isEmpty : equals(['newest']));
+      if (expected == 'initial') expect(controller.value, before);
+      expect(tester.state<FormFieldState<String>>(find.byType(TextFormField)).value, expected);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('user input wins over a late queued revision and preserves focus, selection and IME', (tester) async {
+    final host = await _mountRevisionHost(tester);
+    await tester.showKeyboard(find.byType(TextFormField));
+    final controller = _editable(tester).controller;
+    final focusNode = _editable(tester).focusNode;
+    final editableState = tester.state<EditableTextState>(find.byType(EditableText));
+    await _queueRevisionAfterFrame(tester, host, text: 'stale', revision: 1);
+    expect(controller.text, 'initial');
+    const input = TextEditingValue(
+      text: 'typed 中 ',
+      selection: TextSelection(baseOffset: 6, extentOffset: 7),
+      composing: TextRange(start: 6, end: 7),
+    );
+    editableState.updateEditingValue(input);
+    await tester.pumpAndSettle();
+    expect(_editable(tester).controller, same(controller));
+    expect(tester.state<EditableTextState>(find.byType(EditableText)), same(editableState));
+    expect(_editable(tester).focusNode, same(focusNode));
+    expect(focusNode.hasFocus, isTrue);
+    expect(controller.value, input);
+    expect(host.currentState!._initialValue, input.text.trim());
+    expect(host.currentState!.userChanges, [input.text]);
+    expect(tester.state<FormFieldState<String>>(find.byType(TextFormField)).value, input.text);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final revert in [false, true]) {
+    final change = revert ? 'an edit followed by a revert' : 'a selection and IME change';
+    testWidgets('late revision cannot overwrite $change', (tester) async {
+      final host = await _mountRevisionHost(tester);
+      final controller = _editable(tester).controller;
+      final before = controller.value;
+      final writes = <String>[];
+      controller.addListener(() => writes.add(controller.text));
+      await _queueRevisionAfterFrame(tester, host, text: 'stale', revision: 1);
+      final edited = revert
+          ? const TextEditingValue(text: 'intermediate', selection: TextSelection.collapsed(offset: 12))
+          : before.copyWith(
+              selection: const TextSelection(baseOffset: 1, extentOffset: 3),
+              composing: const TextRange(start: 1, end: 4),
+            );
+      controller.value = edited;
+      if (revert) controller.value = before;
+      final expected = controller.value;
+      await tester.pumpAndSettle();
+      expect(_editable(tester).controller, same(controller));
+      expect(controller.value, expected);
+      expect(writes, isNot(contains('stale')));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('external controller handoff invalidates queued owned sync without touching or disposing the caller', (
+    tester,
+  ) async {
+    final host = await _mountRevisionHost(tester);
+    final writes = <String>[];
+    final owned = _editable(tester).controller;
+    owned.addListener(() => writes.add(owned.text));
+    await _queueRevisionAfterFrame(tester, host, text: 'stale', revision: 1);
+    final external = _CallerController()
+      ..value = const TextEditingValue(
+        text: 'caller',
+        selection: TextSelection(baseOffset: 1, extentOffset: 3),
+        composing: TextRange(start: 1, end: 4),
+      );
+    addTearDown(external.dispose);
+    final before = external.value;
+    host.currentState!.replace(text: 'ignored', revision: 2, controller: external);
+    await tester.pumpAndSettle();
+    expect(_editable(tester).controller, same(external));
+    expect(external.value, before);
+    expect(writes, isNot(contains('stale')));
+    expect(external.wasDisposed, isFalse);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(external.wasDisposed, isFalse);
+    external.text = 'still caller-owned';
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unmount invalidates a late queued sync before the owned controller is disposed', (tester) async {
+    final host = await _mountRevisionHost(tester);
+    final controller = _editable(tester).controller;
+    final writes = <String>[];
+    controller.addListener(() => writes.add(controller.text));
+    await _queueRevisionAfterFrame(tester, host, text: 'stale', revision: 1);
+    expect(controller.text, 'initial');
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    expect(host.currentState, isNull);
+    expect(writes, isNot(contains('stale')));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('default initialValue remains initialization-only on rebuild', (tester) async {
     await _mountField(tester, initialValue: 'initial');
     await tester.enterText(find.byType(TextFormField), 'user text');
@@ -136,10 +361,14 @@ void main() {
       composing: TextRange(start: 1, end: 4),
     );
     controller.value = value;
+    var notifications = 0;
+    controller.addListener(() => notifications++);
 
     await _mountField(tester, initialValue: 'same', revision: 1);
     expect(_editable(tester).controller, same(controller));
     expect(controller.value, value);
+    expect(notifications, 0);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('external controllers stay authoritative and caller-owned through replacement and unmount', (

@@ -324,11 +324,18 @@ void main() {
         }
       }
       final file = await File('${directory.path}/typed-options.json').writeAsString(jsonEncode(cases));
+      // Match libbox's existing production binary-wide linkname exception.
+      // This bridge does not exercise the private OOM profiler ABI.
       final result = await Process.run(
         'go',
         [
           'test',
+          '-tags=',
           '-mod=readonly',
+          '-ldflags=-checklinkname=0',
+          '-timeout=120s',
+          '-p=2',
+          '-parallel=2',
           './v2/config',
           '-run',
           '^TestPreserveDomainForFallbackProxyAppRoundTrip\$',

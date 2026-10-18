@@ -87,6 +87,10 @@ A subsequent checked-write repair, `3c3e5593`, explicitly dispatches through the
 
 The Form callback window and the two widget tests' real file/database waits are under separate investigation. The real Dart-to-Go bridge and its 12 Go cases completed again, but neither that result nor the repository subset replaces the missing complete run. Keep the PR unmerged, retain each failed run, and fix the concrete cause rather than skipping cases or extending deadlines.
 
+[Run 39164805375](https://github.com/edgora-ai/hiddify-app/actions/runs/39164805375), at `5fee75ff`, finished all 403 visible cases across the 18 requested files: 402 succeeded, one failed, and none were skipped. The reporter completed with `success: false`; no tests remained unfinished. The shared-field suite completed 18 cases, profile-bound retry 44, and SingleCall four. These results verify the previously unexecuted slices but do not make this run pass.
+
+The remaining IME/save widget case reported that tapping Save did not start a save. Its actual trigger still needs correction and verification; the subsequent null result is not accepted as success. The real-async test repair and frame-helper correction received independent source review, but the complete test and targeted-analysis gates remain unmet. No new package or installation follows from this partial result.
+
 ## Local package path
 
 The legacy `ios-libs` target downloads a published Core and can overwrite the local framework. It is not used for this source delivery. The legacy Core preparation also performs unrelated dependency updates and tool installation; the separate `ios-local` entry avoids that path.

@@ -186,6 +186,19 @@ class ProfileDetailsPage extends HookConsumerWidget with PresLogger {
                           ),
                           const Divider(indent: 16, endIndent: 16),
                         ],
+                        SwitchListTile.adaptive(
+                          title: Text(
+                            t.pages.profileDetails.form.preserveDomainForFallbackProxy,
+                            style: theme.textTheme.titleSmall!.copyWith(color: theme.colorScheme.onSurface),
+                          ),
+                          value: userOverride.preserveDomainForFallbackProxy ?? false,
+                          onChanged: isLoading
+                              ? null
+                              : (value) => ref
+                                    .read(provider.notifier)
+                                    .setUserOverride(userOverride.copyWith(preserveDomainForFallbackProxy: value)),
+                        ),
+                        const Divider(indent: 16, endIndent: 16),
                         ListTile(
                           title: Text(t.pages.profileDetails.lastUpdate),
                           leading: const Icon(FluentIcons.history_24_regular),

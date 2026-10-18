@@ -1,0 +1,467 @@
+name: Fork feature tests (host only)
+
+'on':
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  feature-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      FLUTTER_SKIP_UPDATE_CHECK: 'true'
+      GIT_TERMINAL_PROMPT: '0'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+      GOWORK: 'off'
+      GOENV: 'off'
+      GOFLAGS: ''
+      GOMAXPROCS: '2'
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      GOPRIVATE: ''
+      GONOPROXY: ''
+      GONOSUMDB: ''
+      PUB_HOSTED_URL: https://pub.dev
+      # Source/import/init-reviewed objects, not evidence of tests passing.
+      # Update these together after independently reviewing any child merge pins.
+      CORE_SHA: 9178562f45a9fa6829651219ac52875da24e81a4
+      SING_BOX_SHA: 4a9b51ae38646f5162927d45603e9a2b39e83258
+      RAY2SING_SHA: 0da2eb56c77690dc6acddba9322687fba42a6183
+      WIREGUARD_SHA: 2565b3a82dee8b32fdea66c5ca050bd2ef363d09
+      TAILSCALE_SHA: 1f5488c9848da9d4f1104cc29998535939f23df8
+      PSIPHON_QUIC_SHA: 47042a7c2475c081b370b8c9da2c22525774b27b
+      PSIPHON_TLS_SHA: 7fbe21fb997a1bb94d1d16860196759abcb120ff
+      PUBSPEC_LOCK_SHA256: c1ef1cf6a53c2755fa2708f509f45558e9c5781069284998f559f3f15e46cef9
+      FEATURE_TESTS: |
+        test/features/proxy/node/data/node_json_adapter_test.dart
+        test/features/proxy/node/data/node_reference_sync_test.dart
+        test/features/proxy/node/data/node_share_link_encoder_test.dart
+        test/features/proxy/node/validation/node_validators_test.dart
+        test/features/proxy/node/widget/node_fields_test.dart
+        test/utils/custom_text_form_field_test.dart
+        test/features/profile/data/preserve_domain_fallback_test.dart
+        test/features/profile/details/profile_details_fallback_proxy_test.dart
+        test/features/profile/data/profile_parser_test.dart
+        test/utils/link_parsers_test.dart
+        test/features/connection/model/startup_connection_test.dart
+        test/features/profile/data/profile_commit_repository_test.dart
+        test/features/proxy/node/data/node_config_service_persistence_test.dart
+        test/features/proxy/node/notifier/node_editor_notifier_persistence_test.dart
+        test/features/proxy/node/widget/node_editor_page_persistence_test.dart
+        test/features/profile/details/profile_details_node_persistence_test.dart
+        test/features/connection/notifier/profile_bound_retry_test.dart
+        test/features/connection/notifier/single_call_test.dart
+      FEATURE_SUPPORT: |
+        test/features/profile/data/profile_commit_test_support.dart
+        test/features/proxy/node/notifier/node_editor_test_support.dart
+      FEATURE_ANALYZE: |
+        lib/features/proxy/node
+        lib/features/profile/data/profile_repository.dart
+        lib/features/profile/data/profile_parser.dart
+        lib/features/profile/details/profile_details_notifier.dart
+        lib/features/profile/details/profile_details_page.dart
+        lib/features/profile/model/profile_entity.dart
+        lib/features/connection/notifier/connection_notifier.dart
+        lib/features/connection/model/startup_connection.dart
+        lib/singbox/model/singbox_config_option.dart
+        lib/utils/custom_text_form_field.dart
+        lib/utils/link_parsers.dart
+
+    steps:
+      - name: Create fresh job-owned host-test directories
+        run: |
+          set -euo pipefail
+          umask 077
+          root="$RUNNER_TEMP/fork-feature-tests"
+          test ! -e "$root" && test ! -L "$root"
+          mkdir -m 700 "$root"
+          for name in home pub tmp go-cache go-mod go-tmp gopath; do
+            mkdir -m 700 "$root/$name"
+          done
+          {
+            printf 'FEATURE_ROOT=%s\n' "$root"
+            printf 'HOME=%s/home\n' "$root"
+            printf 'PUB_CACHE=%s/pub\n' "$root"
+            printf 'TMPDIR=%s/tmp\n' "$root"
+            printf 'GOCACHE=%s/go-cache\n' "$root"
+            printf 'GOMODCACHE=%s/go-mod\n' "$root"
+            printf 'GOTMPDIR=%s/go-tmp\n' "$root"
+            printf 'GOPATH=%s/gopath\n' "$root"
+            printf 'XDG_CONFIG_HOME=%s/home/.config\n' "$root"
+            printf 'XDG_CACHE_HOME=%s/home/.cache\n' "$root"
+            printf 'XDG_DATA_HOME=%s/home/.local/share\n' "$root"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify PR source, exact Core gitlink and required test inputs
+        env:
+          EXPECTED_APP_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, stat, subprocess
+          root = pathlib.Path.cwd()
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          actual = git('rev-parse', 'HEAD')
+          if not re.fullmatch(r'[0-9a-f]{40}', os.environ['EXPECTED_APP_SHA']) or actual != os.environ['EXPECTED_APP_SHA']:
+              raise SystemExit('PR checkout identity mismatch')
+          expected = '160000 commit ' + os.environ['CORE_SHA'] + '\thiddify-core'
+          if git('ls-tree', 'HEAD', '--', 'hiddify-core') != expected:
+              raise SystemExit('Core gitlink is outside the source-reviewed pins; review/update the exact pins, not a branch')
+          tests = os.environ['FEATURE_TESTS'].splitlines()
+          support = os.environ['FEATURE_SUPPORT'].splitlines()
+          required = tests + support + [
+              'pubspec.lock', 'lib/gen/hiddify_core_generated_bindings.dart',
+              'lib/hiddifycore/generated/v2/config/route_rule.pb.dart',
+              'lib/hiddifycore/generated/v2/hcore/hcore_service.pbgrpc.dart',
+          ]
+          if len(tests) != 18 or len(set(required)) != len(required):
+              raise SystemExit('Unexpected or duplicate directed test scope')
+          hashes = {}
+          for rel in required:
+              git('ls-files', '--error-unmatch', '--', rel)
+              path = root
+              for component in pathlib.PurePosixPath(rel).parts:
+                  path /= component
+                  if path.is_symlink():
+                      raise SystemExit('Refusing a symlink input: ' + rel)
+              if not stat.S_ISREG(path.lstat().st_mode):
+                  raise SystemExit('Missing regular input: ' + rel)
+              hashes[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          if hashes['pubspec.lock'] != os.environ['PUBSPEC_LOCK_SHA256']:
+              raise SystemExit('App lock is outside the reviewed locked dependency set')
+          if 'HIDDIFY_TEST_FALLBACK_PROXY_OPTIONS' in os.environ:
+              raise SystemExit('The cross-Go input must be generated by this job, not supplied externally')
+          print(json.dumps({'app_sha': actual, 'directed_tests': tests, 'input_sha256': hashes}, sort_keys=True))
+          PY
+
+      # Independent public HTTPS checkouts avoid the SSH ray2sing declaration and
+      # never initialize an old working tree, follow a branch or recurse blindly.
+      - uses: actions/checkout@v6
+        with:
+          repository: edgora-ai/hiddify-core
+          ref: ${{ env.CORE_SHA }}
+          path: hiddify-core
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@v6
+        with:
+          repository: edgora-ai/hiddify-sing-box
+          ref: ${{ env.SING_BOX_SHA }}
+          path: hiddify-core/hiddify-sing-box
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@v6
+        with:
+          repository: hiddify/ray2sing
+          ref: ${{ env.RAY2SING_SHA }}
+          path: hiddify-core/ray2sing
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@v6
+        with:
+          repository: hiddify/wireguard-go
+          ref: ${{ env.WIREGUARD_SHA }}
+          path: hiddify-core/hiddify-sing-box/replace/wireguard-go
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@v6
+        with:
+          repository: hiddify/tailscale
+          ref: ${{ env.TAILSCALE_SHA }}
+          path: hiddify-core/hiddify-sing-box/replace/tailscale
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@v6
+        with:
+          repository: hiddify/psiphon-quic-go
+          ref: ${{ env.PSIPHON_QUIC_SHA }}
+          path: hiddify-core/hiddify-sing-box/replace/psiphon-quic-go
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - uses: actions/checkout@v6
+        with:
+          repository: hiddify/psiphon-tls
+          ref: ${{ env.PSIPHON_TLS_SHA }}
+          path: hiddify-core/hiddify-sing-box/replace/psiphon-tls
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Read back every source identity and record immutable lock inputs
+        run: |
+          set -euo pipefail
+          cat > "$FEATURE_ROOT/check-inputs.py" <<'PY'
+          import hashlib, json, os, pathlib, stat, subprocess, sys
+          workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          baseline = pathlib.Path(os.environ['FEATURE_ROOT']) / 'inputs.json'
+          def git(root, *args):
+              return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
+          def digest(path):
+              current = pathlib.Path(path.anchor)
+              for part in path.parts[1:]:
+                  current /= part
+                  if current.is_symlink():
+                      raise SystemExit('Refusing a symlink input: ' + str(path))
+              if not path.exists():
+                  return None
+              if not stat.S_ISREG(path.lstat().st_mode):
+                  raise SystemExit('Not a regular input: ' + str(path))
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          base = 'hiddify-core/hiddify-sing-box'
+          specs = [
+              ('hiddify-core', '.', 'hiddify-core', 'edgora-ai/hiddify-core', 'CORE_SHA'),
+              (base, 'hiddify-core', 'hiddify-sing-box', 'edgora-ai/hiddify-sing-box', 'SING_BOX_SHA'),
+              ('hiddify-core/ray2sing', 'hiddify-core', 'ray2sing', 'hiddify/ray2sing', 'RAY2SING_SHA'),
+              (base+'/replace/wireguard-go', base, 'replace/wireguard-go', 'hiddify/wireguard-go', 'WIREGUARD_SHA'),
+              (base+'/replace/tailscale', base, 'replace/tailscale', 'hiddify/tailscale', 'TAILSCALE_SHA'),
+              (base+'/replace/psiphon-quic-go', base, 'replace/psiphon-quic-go', 'hiddify/psiphon-quic-go', 'PSIPHON_QUIC_SHA'),
+              (base+'/replace/psiphon-tls', base, 'replace/psiphon-tls', 'hiddify/psiphon-tls', 'PSIPHON_TLS_SHA'),
+          ]
+          identities = {'.': git(workspace, 'rev-parse', 'HEAD')}
+          locks = {str(workspace/'pubspec.lock'): digest(workspace/'pubspec.lock')}
+          for rel, parent, child, repo, variable in specs:
+              root = workspace/rel
+              expected = os.environ[variable]
+              if git(workspace/parent, 'ls-tree', 'HEAD', '--', child) != '160000 commit '+expected+'\t'+child:
+                  raise SystemExit('Gitlink identity mismatch: ' + rel)
+              if git(root, 'rev-parse', 'HEAD') != expected:
+                  raise SystemExit('Checkout identity mismatch: ' + rel)
+              subprocess.run(['git', '-C', str(root), 'diff', '--exit-code', '--no-ext-diff',
+                              '--ignore-submodules=all', 'HEAD', '--'], check=True)
+              origin = git(root, 'remote', 'get-url', 'origin')
+              if origin not in ('https://github.com/'+repo, 'https://github.com/'+repo+'.git'):
+                  raise SystemExit('Unexpected public checkout origin: ' + rel)
+              identities[rel] = expected
+              for name in ('go.mod', 'go.sum'):
+                  path = root/name
+                  locks[str(path)] = digest(path)
+              if locks[str(root/'go.mod')] is None:
+                  raise SystemExit('Missing local replacement module: ' + rel)
+          selected = (os.environ['FEATURE_TESTS'] + os.environ['FEATURE_SUPPORT']).splitlines()
+          source = subprocess.check_output(['git', '-C', str(workspace), 'ls-files', '-z', '--',
+                                            *os.environ['FEATURE_ANALYZE'].splitlines()], text=True)
+          selected += [rel for rel in source.split('\0') if rel]
+          for rel in selected:
+              if rel:
+                  locks[str(workspace/rel)] = digest(workspace/rel)
+                  if locks[str(workspace/rel)] is None:
+                      raise SystemExit('Missing directed source/test input: ' + rel)
+          observed = {'identities': identities, 'locks_and_source_sha256': locks}
+          if sys.argv[1] == 'record':
+              with baseline.open('x') as output:
+                  json.dump(observed, output, sort_keys=True)
+          elif sys.argv[1] == 'verify':
+              if observed != json.loads(baseline.read_text()):
+                  raise SystemExit('Source identity, lock or directed test input changed')
+          else:
+              raise SystemExit('Unknown input-check operation')
+          print(json.dumps(observed, sort_keys=True))
+          PY
+          python3 "$FEATURE_ROOT/check-inputs.py" record
+
+      - uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: '3.38.5'
+          channel: stable
+          cache: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          check-latest: false
+          cache: false
+
+      - name: Verify actual SDK versions and constrained Go environment
+        run: |
+          set -euo pipefail
+          flutter --no-version-check --suppress-analytics --version --machine > "$FEATURE_ROOT/flutter-version.json"
+          dart --version
+          go version
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          actual = json.loads((pathlib.Path(os.environ['FEATURE_ROOT'])/'flutter-version.json').read_text())
+          if (actual['frameworkVersion'], actual['frameworkRevision'], actual['dartSdkVersion']) != (
+              '3.38.5', 'f6ff1529fd6d8af5f706051d9251ac9231c83407', '3.10.4'):
+              raise SystemExit('Unexpected Flutter/Dart SDK')
+          if subprocess.check_output(['go', 'env', 'GOVERSION'], text=True).strip() != 'go1.26.3':
+              raise SystemExit('Unexpected Go toolchain; automatic toolchain switching is forbidden')
+          required = {'GOTOOLCHAIN': 'local', 'CGO_ENABLED': '0', 'GOWORK': 'off', 'GOFLAGS': '', 'GOMAXPROCS': '2'}
+          if any(os.environ.get(key) != value for key, value in required.items()):
+              raise SystemExit('Go environment constraint mismatch')
+          print(json.dumps({'flutter': actual, 'go_constraints': required}, sort_keys=True))
+          PY
+
+      - name: Get only locked public App dependencies
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          timeout --kill-after=5s 150s flutter --no-version-check --suppress-analytics pub get --enforce-lockfile
+          git diff --exit-code -- pubspec.lock
+          python3 "$FEATURE_ROOT/check-inputs.py" verify
+
+      - name: Generate Dart models and translations only
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          timeout --kill-after=5s 330s dart run build_runner build --delete-conflicting-outputs
+          timeout --kill-after=5s 25s dart run slang
+          python3 "$FEATURE_ROOT/check-inputs.py" verify
+
+      - name: Run exact business tests and require real cross-Go completion
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(printf '%s' "$FEATURE_TESTS")
+          # The existing Dart fixture alone invokes the exact AppRoundTrip Go test
+          # and creates typed-options.json under this job's private TMPDIR. No
+          # standalone/broad Go tests or native library build. The explicit
+          # binary-wide linker exception belongs to that single Dart entry;
+          # this workflow keeps GOFLAGS empty and adds no tags/linker overrides.
+          # This bridge does not validate the private OOM profiler ABI.
+          set +e
+          timeout --kill-after=5s 330s flutter --no-version-check --suppress-analytics test \
+            --no-pub --concurrency=2 --reporter=json \
+            --dart-define=HIDDIFY_TEST_GO_BUILDER=true "${tests[@]}" 2>&1 | tee "$FEATURE_ROOT/tests.jsonl"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          FEATURE_FLUTTER_EXIT="${statuses[0]}" FEATURE_TEE_EXIT="${statuses[1]}" python3 - <<'PY'
+          import collections, json, os, pathlib, re, urllib.parse
+          errors = []
+          for key in ('FEATURE_FLUTTER_EXIT', 'FEATURE_TEE_EXIT'):
+              if os.environ[key] != '0':
+                  errors.append(key+'='+os.environ[key])
+          suites, starts, finishes, prints, completions = {}, {}, {}, [], []
+          report = pathlib.Path(os.environ['FEATURE_ROOT'])/'tests.jsonl'
+          for number, line in enumerate(report.read_text().splitlines(), 1):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  errors.append('Non-JSON/truncated reporter record at line '+str(number))
+                  continue
+              kind = event.get('type')
+              if kind == 'suite':
+                  suites[event['suite']['id']] = event['suite']
+              elif kind == 'testStart':
+                  test = event['test']
+                  if test['id'] in starts:
+                      errors.append('Duplicate testStart ID')
+                  starts[test['id']] = test
+              elif kind == 'testDone':
+                  if event['testID'] in finishes:
+                      errors.append('Duplicate testDone ID')
+                  finishes[event['testID']] = event
+                  if event.get('skipped') or event.get('result') != 'success':
+                      errors.append('Failed/skipped test ID '+str(event['testID']))
+              elif kind == 'error':
+                  errors.append('Reporter error: '+event.get('error', 'unknown'))
+              elif kind == 'print':
+                  prints.append(event)
+              elif kind == 'done':
+                  completions.append(event)
+          if len(completions) != 1 or completions[0].get('success') is not True:
+              errors.append('No unique successful reporter completion')
+          if set(finishes) - set(starts):
+              errors.append('Reporter completion without a matching testStart')
+          workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          wanted = set(os.environ['FEATURE_TESTS'].splitlines())
+          counts = collections.Counter()
+          bridge = []
+          bridge_name = 'saved profile -> typed Dart JSON -> real Go BuildConfig'
+          for test_id, test in starts.items():
+              done = finishes.get(test_id)
+              if done is None:
+                  errors.append('Unfinished test ID '+str(test_id))
+                  continue
+              if done.get('hidden') or test['name'].startswith('loading '):
+                  continue
+              suite = suites.get(test['suiteID'], {})
+              uri = urllib.parse.urlparse(suite.get('path', suite.get('url', '')))
+              if uri.scheme not in ('', 'file') or uri.netloc:
+                  errors.append('Non-file test suite identity')
+                  continue
+              path = pathlib.Path(urllib.parse.unquote(uri.path))
+              path = pathlib.Path(os.path.abspath(path if path.is_absolute() else workspace/path))
+              try:
+                  rel = path.relative_to(workspace).as_posix()
+              except ValueError:
+                  errors.append('Unattributed test suite: '+str(path))
+                  continue
+              if rel not in wanted:
+                  errors.append('Unexpected test suite: '+rel)
+                  continue
+              if test.get('metadata', {}).get('skip') not in (None, False):
+                  errors.append('Skipped test metadata: '+test['name'])
+              counts[rel] += 1
+              if rel == 'test/features/profile/data/preserve_domain_fallback_test.dart' and test['name'] == bridge_name:
+                  bridge.append(test_id)
+          if not counts or any(counts[path] == 0 for path in wanted):
+              errors.append('Every explicitly requested file must execute at least one actual case')
+          go_text = ''
+          if len(bridge) != 1:
+              errors.append('The actual Dart-to-Go case did not uniquely execute')
+          else:
+              go_text = '\n'.join(event['message'] for event in prints if event.get('testID') == bridge[0])
+          name = 'TestPreserveDomainForFallbackProxyAppRoundTrip'
+          if len(re.findall(r'(?m)^--- PASS: '+name+r' \(', go_text)) != 1:
+              errors.append('The exact Go parent test did not complete successfully')
+          if re.search(r'--- (?:FAIL|SKIP):', go_text):
+              errors.append('Go reported a failed/skipped case')
+          expected = {name+'/'+profile+'-'+flag+'/fake-'+fake
+                      for profile in ('local', 'remote') for flag in ('null', 'false', 'true') for fake in ('false', 'true')}
+          passed = re.findall(r'(?m)^\s*--- PASS: ('+name+r'/\S+) \(', go_text)
+          if len(passed) != len(expected) or set(passed) != expected:
+              errors.append('All 12 synthetic saved-profile Go subcases must actually pass')
+          if not re.search(r'(?m)^ok\s+github\.com/hiddify/hiddify-core/v2/config\s+[0-9.]+s(?:\s|$)', go_text):
+              errors.append('No successful Go package completion from the Dart subprocess')
+          print(json.dumps({'actual_cases': sum(counts.values()), 'per_file': dict(counts),
+                            'cross_go_subcases': len(passed), 'errors': errors}, sort_keys=True))
+          if errors:
+              raise SystemExit(1)
+          PY
+          python3 "$FEATURE_ROOT/check-inputs.py" verify
+
+      - name: Analyze only the selected business source and tests
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          mapfile -t source < <(printf '%s' "$FEATURE_ANALYZE")
+          mapfile -t tests < <(printf '%s' "$FEATURE_TESTS")
+          mapfile -t support < <(printf '%s' "$FEATURE_SUPPORT")
+          timeout --kill-after=5s 90s flutter --no-version-check --suppress-analytics analyze \
+            --no-pub --no-fatal-infos "${source[@]}" "${tests[@]}" "${support[@]}"
+          python3 "$FEATURE_ROOT/check-inputs.py" verify
+
+      - name: Final identity and lock gate, including earlier failures
+        if: always()
+        run: |
+          set -euo pipefail
+          test -f "$FEATURE_ROOT/check-inputs.py"
+          test -f "$FEATURE_ROOT/inputs.json"
+          python3 "$FEATURE_ROOT/check-inputs.py" verify
+          git diff --exit-code -- pubspec.lock

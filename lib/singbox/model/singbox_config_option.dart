@@ -49,6 +49,7 @@ class SingboxConfigOption with _$SingboxConfigOption {
     required bool allowConnectionFromLan,
     required String lanSharingPassword,
     required bool enableFakeDns,
+    @Default(false) bool preserveDomainForFallbackProxy,
     // required bool enableDnsRouting,
     required bool independentDnsCache,
     required Map<String, dynamic> routeRule,

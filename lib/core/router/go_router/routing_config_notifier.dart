@@ -16,6 +16,8 @@ import 'package:hiddify/features/log/overview/logs_page.dart';
 import 'package:hiddify/features/profile/details/profile_details_page.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
 import 'package:hiddify/features/profile/overview/profiles_page.dart';
+import 'package:hiddify/features/proxy/node/widget/node_editor_page.dart';
+import 'package:hiddify/features/proxy/node/widget/profile_nodes_page.dart';
 import 'package:hiddify/features/proxy/overview/proxies_overview_page.dart';
 import 'package:hiddify/features/route_rules/notifier/rule_notifier.dart';
 import 'package:hiddify/features/route_rules/overview/generic_list_page.dart';
@@ -46,6 +48,32 @@ final branchesScope = <String, FocusScopeNode>{
 final loadingConfig = RoutingConfig(
   routes: <RouteBase>[GoRoute(path: '/home', builder: (context, state) => const Material())],
 );
+
+/// Node management + editor routes shared by both profile-details mounts
+/// (mobile home branch and desktop profiles branch).
+List<RouteBase> profileNodeRoutes() => [
+  GoRoute(
+    name: 'profileNodes',
+    path: 'nodes',
+    pageBuilder: (_, state) => customTransition(
+      TransitionType.fade,
+      state.pageKey,
+      ProfileNodesPage(profileId: state.pathParameters['id']!),
+    ),
+    routes: [
+      GoRoute(
+        name: 'nodeEdit',
+        // Add-mode: no `tag` query param. Edit-mode: `?tag=<rawTag>`.
+        path: 'edit',
+        pageBuilder: (_, state) => customTransition(
+          TransitionType.fade,
+          state.pageKey,
+          NodeEditorPage(profileId: state.pathParameters['id']!, rawTag: state.uri.queryParameters['tag']),
+        ),
+      ),
+    ],
+  ),
+];
 
 String getNameOfBranch(bool isMobileBreakpoint, bool showProfilesAction, int index) => isMobileBreakpoint
     ? ['home', 'settings'][index]
@@ -143,6 +171,7 @@ class RoutingConfigNotifier extends _$RoutingConfigNotifier {
                           state.pageKey,
                           ProfileDetailsPage(id: state.pathParameters['id']!),
                         ),
+                        routes: profileNodeRoutes(),
                       ),
                   ],
                 ),
@@ -164,6 +193,7 @@ class RoutingConfigNotifier extends _$RoutingConfigNotifier {
                           state.pageKey,
                           ProfileDetailsPage(id: state.pathParameters['id']!),
                         ),
+                        routes: profileNodeRoutes(),
                       ),
                     ],
                   ),

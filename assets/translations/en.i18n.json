@@ -178,6 +178,7 @@
         "invalidUrl": "Invalid URL",
         "urlHint": "Full configuration URL",
         "disableAutoUpdate": "Turn off auto update",
+        "preserveDomainForFallbackProxy": "Send destination hostnames",
         "autoUpdateInterval": "Auto update interval",
         "loading": "Adding profile…"
       }
@@ -585,6 +586,99 @@
           "conduitPairingId": "Conduit pairing ID"
         }
       }
+    },
+    "profileNodes": {
+      "title": "Nodes",
+      "manage": "Manage nodes",
+      "empty": "No nodes yet",
+      "emptyAction": "Add a node"
+    },
+    "nodeEditor": {
+      "addTitle": "Add node",
+      "editTitle": "Edit node",
+      "actions": {
+        "rename": "Rename",
+        "copyLink": "Copy share link",
+        "copyJson": "Copy node JSON",
+        "generateUuid": "Generate UUID",
+        "tryAgain": "Try again",
+        "reload": "Reload",
+        "keepEditing": "Keep editing",
+        "copyAnyway": "Copy anyway"
+      },
+      "sections": {
+        "basics": "Basics",
+        "credentials": "Credentials",
+        "transport": "Transport",
+        "tls": "TLS",
+        "multiplexing": "Multiplexing",
+        "advanced": "Advanced"
+      },
+      "fields": {
+        "protocol": "Protocol",
+        "server": "Server address",
+        "port": "Port",
+        "uuid": "UUID",
+        "password": "Password",
+        "encryption": "Encryption",
+        "alterId": "Alter ID",
+        "flow": "Flow",
+        "packetEncoding": "Packet encoding",
+        "method": "Encryption method",
+        "plugin": "Plugin",
+        "pluginOptions": "Plugin options",
+        "udpOverTcp": "UDP over TCP",
+        "groups": "Proxy groups",
+        "transport": "Transport",
+        "hostHeader": "Host header",
+        "path": "Path",
+        "serviceName": "Service name",
+        "maxEarlyData": "Early data size",
+        "earlyDataHeader": "Early data header",
+        "tlsMode": "Security",
+        "serverName": "Server name",
+        "alpn": "ALPN",
+        "skipCertificateVerification": "Skip certificate verification",
+        "disableSni": "Turn off SNI",
+        "utls": "uTLS",
+        "fingerprint": "Fingerprint",
+        "realityPublicKey": "Reality public key",
+        "realityShortId": "Reality short ID",
+        "multiplexEnabled": "Use multiplexing",
+        "multiplexProtocol": "Multiplexing protocol",
+        "maxConnections": "Maximum connections",
+        "padding": "Padding",
+        "congestionControl": "Congestion control",
+        "udpRelayMode": "UDP relay mode",
+        "udpOverStream": "UDP over stream",
+        "zeroRttHandshake": "0-RTT handshake",
+        "heartbeat": "Heartbeat interval",
+        "uploadMbps": "Upload speed in Mbps",
+        "downloadMbps": "Download speed in Mbps",
+        "obfs": "Obfuscation",
+        "obfsPassword": "Obfuscation password",
+        "replacementNode": "Replacement node"
+      },
+      "options": {
+        "noTls": "None",
+        "tls": "TLS",
+        "reality": "Reality"
+      },
+      "help": {
+        "remoteReadOnly": "Subscription nodes are read-only",
+        "savedForNextConnection": "Changes take effect the next time you connect",
+        "tlsRequired": "This protocol requires TLS",
+        "skipCertificateVerification": "Reduces connection security",
+        "zeroRttHandshake": "May allow replay attacks",
+        "shareContainsCredentials": "Share links include your credentials",
+        "unsupportedFieldsPreserved": "Other settings are kept unchanged"
+      },
+      "messages": {
+        "saved": "Node saved",
+        "applied": "Changes applied",
+        "deleted": "Node deleted",
+        "applyFailed": "Saved, but changes weren’t applied"
+      }
     }
   },
   "components": {
@@ -724,6 +818,18 @@
       "alertMessage": "Hide or exit the app?",
       "remember": "Remember this choice"
     },
+    "node": {
+      "deleteTitle": "Delete node?",
+      "deleteMessage": "Delete “${name}” from this profile?",
+      "discardTitle": "Discard changes?",
+      "discardMessage": "Your changes haven’t been saved",
+      "changeTransportTitle": "Change transport?",
+      "changeTransportMessage": "Settings for the current transport will be removed",
+      "changeProtocolTitle": "Change protocol?",
+      "changeProtocolMessage": "Credential fields for the current protocol will be cleared",
+      "shareWarningTitle": "Some settings can’t be shared",
+      "shareWarningMessage": "This link doesn’t include ${fields}"
+    },
     "qrCode": {
       "copyFullLink": "Copy full link",
       "copied": "Copied",
@@ -786,6 +892,36 @@
     "psiphon": {
       "missingLicense": "Psiphon license required",
       "missingLicenseMsg": "This profile uses Psiphon. Accept the Psiphon license to continue."
+    },
+    "nodes": {
+      "required": "Enter ${field}",
+      "invalidServer": "Enter a domain name or IP address",
+      "invalidPort": "Enter a port from 1 to 65535",
+      "invalidUuid": "Enter a valid UUID",
+      "invalidPublicKey": "Enter a valid Reality public key",
+      "invalidShortId": "Use up to 16 hexadecimal characters in pairs",
+      "invalidSsKey": "Enter a valid key for this encryption method",
+      "invalidDuration": "Enter a valid interval",
+      "invalidNumber": "Enter a valid number",
+      "invalidAlpn": "Enter valid ALPN values",
+      "invalidFlow": "This flow needs TCP without multiplexing",
+      "duplicateName": "This name is already in use",
+      "notFound": "This node is no longer available",
+      "ambiguousTag": "This node’s tag isn’t unique",
+      "sourceUnknown": "Open this node from its profile to edit it",
+      "invalidStructure": "This configuration can’t be edited as a form",
+      "invalidJson": "This configuration can’t be edited as a form",
+      "unsupportedProtocol": "This protocol isn’t supported by the form",
+      "readOnly": "Subscription nodes can’t be edited",
+      "configChanged": "This profile changed while you were editing",
+      "referenceConflict": "Update this node’s references before continuing",
+      "wouldBreakConfig": "This change would break the configuration",
+      "lastNode": "Keep at least one proxy node",
+      "emptyGroup": "This would leave a proxy group empty",
+      "incompatibleSettings": "These settings can’t be used together",
+      "saveFailed": "Couldn’t save the node",
+      "validationFailed": "These settings weren’t accepted",
+      "shareUnsupported": "This node can’t be represented by a share link"
     }
   }
 }

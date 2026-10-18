@@ -400,6 +400,14 @@ class ProfileActionsMenu extends HookConsumerWidget {
         ],
       ),
       AdaptiveMenuItem(
+        leadingIcon: const Icon(Icons.dns_rounded),
+        title: t.pages.profileNodes.manage,
+        onTap: () {
+          if (Breakpoint(context).isMobile()) context.pop();
+          context.goNamed('profileNodes', pathParameters: {'id': profile.id});
+        },
+      ),
+      AdaptiveMenuItem(
         leadingIcon: const Icon(Icons.edit_rounded),
         title: t.common.edit,
         onTap: () {

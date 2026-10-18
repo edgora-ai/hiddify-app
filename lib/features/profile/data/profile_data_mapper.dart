@@ -14,7 +14,7 @@ extension ProfileEntityMapper on ProfileEntity {
       url: Value(rp.url),
       lastUpdate: rp.lastUpdate,
       updateInterval: Value(rp.options?.updateInterval),
-      populatedHeaders: Value(jsonEncode(rp.populatedHeaders)),
+      populatedHeaders: Value(rp.populatedHeaders == null ? null : jsonEncode(rp.populatedHeaders)),
       userOverride: Value(rp.userOverride?.toStr()),
       upload: Value(rp.subInfo?.upload),
       download: Value(rp.subInfo?.download),
@@ -30,7 +30,7 @@ extension ProfileEntityMapper on ProfileEntity {
       active: lp.active,
       name: lp.name,
       lastUpdate: lp.lastUpdate,
-      populatedHeaders: Value(jsonEncode(lp.populatedHeaders)),
+      populatedHeaders: Value(lp.populatedHeaders == null ? null : jsonEncode(lp.populatedHeaders)),
       userOverride: Value(lp.userOverride?.toStr()),
       pinned: Value(lp.pinned),
     ),
@@ -43,7 +43,7 @@ extension ProfileEntityMapper on ProfileEntity {
       name: Value(rp.name),
       lastUpdate: Value(rp.lastUpdate),
       updateInterval: Value(rp.options?.updateInterval),
-      populatedHeaders: Value(jsonEncode(rp.populatedHeaders)),
+      populatedHeaders: Value(rp.populatedHeaders == null ? null : jsonEncode(rp.populatedHeaders)),
       userOverride: Value(rp.userOverride?.toStr()),
       upload: Value(rp.subInfo?.upload),
       download: Value(rp.subInfo?.download),
@@ -55,7 +55,7 @@ extension ProfileEntityMapper on ProfileEntity {
     local: (lp) => ProfileEntriesCompanion(
       name: Value(lp.name),
       lastUpdate: Value(lp.lastUpdate),
-      populatedHeaders: Value(jsonEncode(lp.populatedHeaders)),
+      populatedHeaders: Value(lp.populatedHeaders == null ? null : jsonEncode(lp.populatedHeaders)),
       userOverride: Value(lp.userOverride?.toStr()),
     ),
   );
@@ -75,8 +75,21 @@ extension ProfileEntryMapper on ProfileEntry {
     Map<String, dynamic>? mPopulatedHeaders;
 
     if (populatedHeaders != null) {
-      final m = jsonDecode(populatedHeaders!) as Map;
-      mPopulatedHeaders = m.cast<String, dynamic>();
+      // Both SQL NULL and the JSON null written by older entity mappers mean
+      // absent headers. Preserve that nullable contract without rewriting rows.
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(populatedHeaders!);
+      } on FormatException {
+        // Do not attach stored header values to the surfaced parse error.
+        throw const FormatException('Invalid populatedHeaders JSON');
+      }
+      if (decoded != null) {
+        if (decoded is! Map<String, dynamic>) {
+          throw const FormatException('populatedHeaders must be a JSON object or null');
+        }
+        mPopulatedHeaders = decoded;
+      }
     }
 
     return switch (type) {

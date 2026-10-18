@@ -21,6 +21,7 @@ class _PauseAfterProfileRead extends NodeConfigService {
   @override
   Future<Either<NodeFailure, ProfileEntity>> loadProfile(String profileId) async {
     final result = await super.loadProfile(profileId);
+    if (result.isLeft()) return result;
     if (!_paused) {
       _paused = true;
       read.complete();
@@ -95,22 +96,35 @@ void main() {
     final other = originalConfig();
     ((other['outbounds'] as List).first as Map)['password'] = 'detail-writer-password';
     final detailSave = detailWriter.offlineUpdate(profile, jsonEncode(other)).run();
-    await entered.future;
-    expect(await storage.paths.file(profile.id).readAsString(), raw);
-
-    final requested = Completer<void>();
-    repository.configCommitRequested = requested;
-    final nodeSave = service.addNode(profileId: profile.id, expectedRawContent: raw, draft: addedNode(), groupTags: []);
-    await requested.future;
-    expect(repository.validationInputs, isEmpty);
-    release.complete();
-    requireRight(await detailSave);
-    expect((await nodeSave).getLeft().toNullable(), isA<NodeConfigChanged>());
-    await storage.verifyStored(repository, other);
-    expect(
-      await storage.paths.directory.list(followLinks: false).where((entry) => entry.path.endsWith('.tmp.json')).length,
-      0,
-    );
+    final pending = <Future<Object?>>[detailSave];
+    try {
+      await waitForCheckpoint(entered.future, detailSave, description: 'detail writer validation');
+      expect(await storage.paths.file(profile.id).readAsString(), raw);
+      final requested = Completer<void>();
+      repository.configCommitRequested = requested;
+      final nodeSave = service.addNode(
+        profileId: profile.id,
+        expectedRawContent: raw,
+        draft: addedNode(),
+        groupTags: [],
+      );
+      pending.add(nodeSave);
+      await waitForCheckpoint(requested.future, nodeSave, description: 'node checked commit request');
+      expect(repository.validationInputs, isEmpty);
+      release.complete();
+      requireRight(await detailSave);
+      expect((await nodeSave).getLeft().toNullable(), isA<NodeConfigChanged>());
+      await storage.verifyStored(repository, other);
+      expect(
+        await storage.paths.directory
+            .list(followLinks: false)
+            .where((entry) => entry.path.endsWith('.tmp.json'))
+            .length,
+        0,
+      );
+    } finally {
+      await releaseAndSettle(release, pending);
+    }
   });
 
   test('node commit holds the shared lock through TaskEither.run before override-only save', () async {
@@ -121,40 +135,49 @@ void main() {
       await release.future;
     };
     final nodeSave = service.addNode(profileId: profile.id, expectedRawContent: raw, draft: addedNode(), groupTags: []);
-    await entered.future;
-
-    final detailWriter = storage.repository();
-    final override = testOverride.copyWith(preserveDomainForFallbackProxy: true);
-    final detailSave = detailWriter
-        .commitDetails(profile.copyWith(userOverride: override), expectedUserOverride: testOverride)
-        .run();
-    // No DB edit may escape the first writer's pending validation.
-    expect((await storage.dao.getById(profile.id))!.userOverride, testOverride.toStr());
-    release.complete();
-    requireRight(await nodeSave);
-    requireRight(await detailSave);
-    final expected = originalConfig();
-    (expected['outbounds'] as List).add(addedNode());
-    await storage.verifyStored(repository, expected, userOverride: override);
-    expect(detailWriter.validationInputs, isEmpty);
+    final pending = <Future<Object?>>[nodeSave];
+    try {
+      await waitForCheckpoint(entered.future, nodeSave, description: 'node writer validation');
+      final detailWriter = storage.repository();
+      final override = testOverride.copyWith(preserveDomainForFallbackProxy: true);
+      final detailSave = detailWriter
+          .commitDetails(profile.copyWith(userOverride: override), expectedUserOverride: testOverride)
+          .run();
+      pending.add(detailSave);
+      // No DB edit may escape the first writer's pending validation.
+      expect((await storage.dao.getById(profile.id))!.userOverride, testOverride.toStr());
+      release.complete();
+      requireRight(await nodeSave);
+      requireRight(await detailSave);
+      final expected = originalConfig();
+      (expected['outbounds'] as List).add(addedNode());
+      await storage.verifyStored(repository, expected, userOverride: override);
+      expect(detailWriter.validationInputs, isEmpty);
+    } finally {
+      await releaseAndSettle(release, pending);
+    }
   });
 
   test('node content commit uses the latest override instead of the preflight entity', () async {
     final paused = _PauseAfterProfileRead(repository);
     final nodeSave = paused.addNode(profileId: profile.id, expectedRawContent: raw, draft: addedNode(), groupTags: []);
-    await paused.read.future;
-    final override = testOverride.copyWith(preserveDomainForFallbackProxy: true);
-    requireRight(
-      await storage
-          .repository()
-          .commitDetails(profile.copyWith(userOverride: override), expectedUserOverride: testOverride)
-          .run(),
-    );
-    paused.release.complete();
-    requireRight(await nodeSave);
-    final expected = originalConfig();
-    (expected['outbounds'] as List).add(addedNode());
-    await storage.verifyStored(repository, expected, userOverride: override);
+    try {
+      await waitForCheckpoint(paused.read.future, nodeSave, description: 'successful node profile read');
+      final override = testOverride.copyWith(preserveDomainForFallbackProxy: true);
+      requireRight(
+        await storage
+            .repository()
+            .commitDetails(profile.copyWith(userOverride: override), expectedUserOverride: testOverride)
+            .run(),
+      );
+      paused.release.complete();
+      requireRight(await nodeSave);
+      final expected = originalConfig();
+      (expected['outbounds'] as List).add(addedNode());
+      await storage.verifyStored(repository, expected, userOverride: override);
+    } finally {
+      await releaseAndSettle(paused.release, [nodeSave]);
+    }
   });
 
   test('failed validation releases lock and removes only its own temporary file', () async {

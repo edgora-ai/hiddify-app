@@ -20,64 +20,86 @@ import 'package:hiddify/hiddifycore/hiddify_core_service.dart';
 
 T requireRight<L, T>(Either<L, T> value) => value.match((failure) => throw TestFailure('$failure'), (value) => value);
 
+/// An early Left/throw must fail at the missing checkpoint, not hang waiting for
+/// validation that the operation can no longer reach. The caller still awaits
+/// the operation after releasing its gate, so later errors are not discarded.
+Future<void> waitForCheckpoint<T>(
+  Future<void> checkpoint,
+  Future<T> operation, {
+  required String description,
+  String Function(T result)? describeResult,
+}) => Future.any<void>([
+  checkpoint,
+  operation.then<void>((result) {
+    throw TestFailure(
+      '$description was not reached; operation completed with ${describeResult?.call(result) ?? result}',
+    );
+  }),
+]);
+
+Future<void> releaseAndSettle(Completer<void> release, Iterable<Future<Object?>> operations) async {
+  if (!release.isCompleted) release.complete();
+  await Future.wait<Object?>(operations);
+}
+
 const testProfileId = 'isolated-profile';
 const testOverride = UserOverride(name: 'User profile', extraSecurity: 'warp', enableFragment: true);
 
-Map<String, dynamic> originalNode() => {
+Map<String, dynamic> originalNode() => <String, dynamic>{
   'type': 'trojan',
   'tag': 'A',
   'server': 'a.example.invalid',
   'server_port': 443,
   'password': 'original-password',
-  'tls': {
+  'tls': <String, dynamic>{
     'enabled': true,
     'server_name': 'tls.example.invalid',
-    'future_tls_option': ['untouched'],
+    'future_tls_option': <dynamic>['untouched'],
   },
-  'future_node_option': {
-    'nested': [
+  'future_node_option': <String, dynamic>{
+    'nested': <dynamic>[
       'one',
-      {'two': 2},
+      <String, dynamic>{'two': 2},
     ],
   },
 };
 
-Map<String, dynamic> addedNode() => {
+Map<String, dynamic> addedNode() => <String, dynamic>{
   'type': 'trojan',
   'tag': 'B',
   'server': 'b.example.invalid',
   'server_port': 8443,
   'password': 'new-password',
-  'future_added_option': {'preserved': true},
+  'future_added_option': <String, dynamic>{'preserved': true},
 };
 
-Map<String, dynamic> originalConfig() => {
-  'outbounds': [
+Map<String, dynamic> originalConfig() => <String, dynamic>{
+  'outbounds': <dynamic>[
     originalNode(),
-    {
+    <String, dynamic>{
       'type': 'selector',
       'tag': 'select',
-      'outbounds': ['A'],
+      'outbounds': <dynamic>['A'],
       'future_group_option': true,
     },
-    {'type': 'direct', 'tag': 'direct', 'future_direct_option': 7},
+    <String, dynamic>{'type': 'direct', 'tag': 'direct', 'future_direct_option': 7},
   ],
-  'endpoints': [
-    {'type': 'wireguard', 'tag': 'endpoint', 'future_endpoint_option': 'kept'},
+  'endpoints': <dynamic>[
+    <String, dynamic>{'type': 'wireguard', 'tag': 'endpoint', 'future_endpoint_option': 'kept'},
   ],
-  'dns': {
-    'servers': [
-      {'tag': 'dns', 'address': '192.0.2.53'},
+  'dns': <String, dynamic>{
+    'servers': <dynamic>[
+      <String, dynamic>{'tag': 'dns', 'address': '192.0.2.53'},
     ],
   },
-  'route': {
+  'route': <String, dynamic>{
     'final': 'select',
-    'future_route_option': ['keep'],
+    'future_route_option': <dynamic>['keep'],
   },
-  'experimental': {
-    'future_option': {'retained': true},
+  'experimental': <String, dynamic>{
+    'future_option': <String, dynamic>{'retained': true},
   },
-  'future_root_option': [1, 2, 3],
+  'future_root_option': <dynamic>[1, 2, 3],
 };
 
 /// No core process or network: the real repository, parser metadata, files and

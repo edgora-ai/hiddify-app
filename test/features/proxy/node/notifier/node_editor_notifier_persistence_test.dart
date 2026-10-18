@@ -112,25 +112,34 @@ void main() {
       await release.future;
     };
     final saving = notifier.save(t);
-    await entered.future;
-    expect(container.read(provider).requireValue.isSaving, isTrue);
-    notifier.setPath(['password'], 'must-not-enter');
-    notifier.setTlsMode('none');
-    notifier.toggleGroup('select', true);
-    notifier.switchProtocol('vmess', keepName: 'must-not-enter');
-    expect(notifier.validate(t), isFalse);
-    expect((await notifier.save(t)).kind, NodeSaveKind.aborted);
-    expect(container.read(provider).requireValue.draft, submitted);
-    expect(container.read(provider).requireValue.selectedGroups, isEmpty);
-    release.complete();
-    expect((await saving).kind, NodeSaveKind.saved);
-    final saved = container.read(provider).requireValue;
-    expect(saved.originalDraft, submitted);
-    expect(saved.draft, submitted);
-    expect(saved.isDirty, isFalse);
-    final expected = originalConfig();
-    (expected['outbounds'] as List)[0] = submitted;
-    await storage.verifyStored(repository, expected);
+    try {
+      await waitForCheckpoint(
+        entered.future,
+        saving,
+        description: 'D0 save validation',
+        describeResult: (result) => '${result.kind}: ${result.failure}',
+      );
+      expect(container.read(provider).requireValue.isSaving, isTrue);
+      notifier.setPath(['password'], 'must-not-enter');
+      notifier.setTlsMode('none');
+      notifier.toggleGroup('select', true);
+      notifier.switchProtocol('vmess', keepName: 'must-not-enter');
+      expect(notifier.validate(t), isFalse);
+      expect((await notifier.save(t)).kind, NodeSaveKind.aborted);
+      expect(container.read(provider).requireValue.draft, submitted);
+      expect(container.read(provider).requireValue.selectedGroups, isEmpty);
+      release.complete();
+      expect((await saving).kind, NodeSaveKind.saved);
+      final saved = container.read(provider).requireValue;
+      expect(saved.originalDraft, submitted);
+      expect(saved.draft, submitted);
+      expect(saved.isDirty, isFalse);
+      final expected = originalConfig();
+      (expected['outbounds'] as List)[0] = submitted;
+      await storage.verifyStored(repository, expected);
+    } finally {
+      await releaseAndSettle(release, [saving]);
+    }
   });
 
   test('unexpected D1 remains dirty rather than being acknowledged as persisted D0', () async {
@@ -147,18 +156,27 @@ void main() {
       await release.future;
     };
     final saving = notifier.save(t);
-    await entered.future;
-    final newer = NodeJson.deepCopyMap(submitted)..['password'] = 'newer-unsubmitted-password';
-    notifier.injectDraft(newer);
-    release.complete();
-    expect((await saving).kind, NodeSaveKind.saved);
-    final saved = container.read(provider).requireValue;
-    expect(saved.originalDraft, submitted);
-    expect(saved.draft, newer);
-    expect(saved.isDirty, isTrue);
-    final expected = originalConfig();
-    (expected['outbounds'] as List)[0] = submitted;
-    await storage.verifyStored(repository, expected);
+    try {
+      await waitForCheckpoint(
+        entered.future,
+        saving,
+        description: 'D0 validation before D1 injection',
+        describeResult: (result) => '${result.kind}: ${result.failure}',
+      );
+      final newer = NodeJson.deepCopyMap(submitted)..['password'] = 'newer-unsubmitted-password';
+      notifier.injectDraft(newer);
+      release.complete();
+      expect((await saving).kind, NodeSaveKind.saved);
+      final saved = container.read(provider).requireValue;
+      expect(saved.originalDraft, submitted);
+      expect(saved.draft, newer);
+      expect(saved.isDirty, isTrue);
+      final expected = originalConfig();
+      (expected['outbounds'] as List)[0] = submitted;
+      await storage.verifyStored(repository, expected);
+    } finally {
+      await releaseAndSettle(release, [saving]);
+    }
   });
 
   test('active target lookup failure after persistence leaves saved data and a non-busy apply failure', () async {

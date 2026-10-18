@@ -118,6 +118,7 @@
       "empty": "لا توجد بروكسيات متاحة",
       "activeProxy": "البروكسي النشط",
       "unknownIp": "IP غير معروف",
+      "switchFailed": "تعذّر التبديل إلى هذا البروكسي. أعد المحاولة.",
       "sortOptions": {
         "unsorted": "الافتراضي",
         "name": "أبجديًا",
@@ -348,8 +349,8 @@
         },
         "builtinRules": {
           "tag": "مدمجة",
-          "bypassLan": "تجاوز الشبكة المحلية",
-          "blockAds": "حظر الإعلانات والمواقع الضارة",
+          "bypassLan": "تجاوز LAN",
+          "blockAds": "حظر الإعلانات والبرامج الضارة",
           "bypassRegion": "تجاوز المواقع في $region"
         },
         "appBasedRouting": {
@@ -458,7 +459,10 @@
           "title": "استراتيجية Balancer",
           "roundRobin": "Round robin",
           "consistentHash": "Consistent hash",
-          "stickySession": "Sticky session"
+          "stickySession": "Sticky session",
+          "roundRobinDescription": "كل اتصال يستخدم الخادم التالي، لذا قد ترى المواقع تغيّر عنوان IP الخاص بك",
+          "consistentHashDescription": "كل موقع يستخدم الخادم نفسه دائمًا",
+          "stickySessionDescription": "كل موقع يحتفظ بخادم عشوائي حتى تعيد الاتصال"
         },
         "resolveDestination": "تحديد وجهة الاتصال",
         "ipv6Route": "توجيه IPv6",
@@ -509,8 +513,8 @@
         "directPort": "منفذ مباشر",
         "redirectPort": "منفذ إعادة التوجيه",
         "lanSharing": "مشاركة VPN آمنة",
-        "copyLink": "نسخ الرابط",
         "qrCode": "رمز QR",
+        "lanQrSubtitle": "وكيل SOCKS5 لشبكة Wi-Fi هذه",
         "lanIPError": "فشل في الحصول على عنوان IP المحلي"
       },
       "tlsTricks": {
@@ -754,15 +758,28 @@
       "askEachTime": "السؤال كل مرة",
       "alertMessage": "هل تريد إخفاء التطبيق أم الخروج منه؟",
       "remember": "تذكر خياري"
+    },
+    "qrCode": {
+      "copyFullLink": "نسخ الرابط الكامل",
+      "copied": "تم النسخ",
+      "ip": "IP",
+      "port": "المنفذ",
+      "username": "اسم المستخدم",
+      "password": "كلمة المرور",
+      "showPassword": "إظهار كلمة المرور",
+      "hidePassword": "إخفاء كلمة المرور"
     }
   },
   "connection": {
     "tapToConnect": "انقر للاتصال",
     "connect": "اتصال",
     "connecting": "جار الاتصال…",
+    "hotReloading": "جاري تطبيق التغييرات…",
     "connected": "متصل",
     "disconnect": "قطع الاتصال",
     "disconnecting": "جاري قطع الاتصال…",
+    "failed": "تعذّر الاتصال",
+    "tapToRetry": "انقر لإعادة المحاولة",
     "reconnect": "إعادة الاتصال",
     "reconnectMsg": "جاري إعادة الاتصال لتطبيق التغييرات…"
   },
@@ -791,7 +808,9 @@
     "singbox": {
       "serviceNotRunning": "الخدمة لا تعمل",
       "missingPrivilege": "صلاحيات مطلوبة",
-      "missingPrivilegeMsg": "وضع الـ VPN يتطلب صلاحيات المسؤول. يرجى إعادة تشغيل التطبيق كمسؤول أو تغيير وضع الخدمة.",
+      "missingPrivilegeMsg": "لا يمكن بدء وضع الـ VPN. أعد تشغيل التطبيق كمسؤول أو غيّر وضع الخدمة.",
+      "tunAddressInUse": "يوجد VPN آخر نشط",
+      "tunAddressInUseMsg": "لا يمكن بدء وضع الـ VPN. أوقف تشغيل الـ VPN الآخر أو غيّر وضع الخدمة.",
       "invalidConfigOptions": "خيارات تكوين غير صالحة",
       "invalidConfig": "تكوين غير صالح"
     },

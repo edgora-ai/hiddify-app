@@ -24,26 +24,25 @@ class BottomSheetsNotifier extends _$BottomSheetsNotifier {
     final context = rootNavKey.currentContext;
     if (context == null) return null;
     // ref.read(popupCountNotifierProvider.notifier).increase();
-    return await Navigator.of(context)
-        .push<T>(
-          ModalBottomSheetRoute(
-            constraints: BottomSheetConst.boxConstraints,
-            isScrollControlled: isScrollControlled,
-            builder: (context) => ClipRRect(
-              borderRadius: BottomSheetConst.borderRadius,
-              child: Material(
-                child: Padding(
-                  padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-                  child: child,
-                ),
-              ),
-            ),
+    // showModalBottomSheet also gives the dimmed layer behind the sheet its screen reader label and hint
+    return await showModalBottomSheet<T>(
+      context: context,
+      useRootNavigator: true,
+      constraints: BottomSheetConst.boxConstraints,
+      isScrollControlled: isScrollControlled,
+      builder: (context) => ClipRRect(
+        borderRadius: BottomSheetConst.borderRadius,
+        child: Material(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+            child: child,
           ),
-        )
-        .then((value) {
-          // ref.read(popupCountNotifierProvider.notifier).decrease();
-          return value;
-        });
+        ),
+      ),
+    ).then((value) {
+      // ref.read(popupCountNotifierProvider.notifier).decrease();
+      return value;
+    });
   }
 
   /// The host the deep link would actually fetch from, for the confirmation

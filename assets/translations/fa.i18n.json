@@ -112,6 +112,7 @@
       "empty": "هیچ پروکسی موجود نیست",
       "activeProxy": "پروکسی فعال",
       "unknownIp": "IP ناشناخته",
+      "switchFailed": "تغییر به این پروکسی ممکن نشد. دوباره تلاش کنید.",
       "sortOptions": {
         "unsorted": "پیش‌فرض",
         "name": "بر اساس نام",
@@ -338,8 +339,8 @@
         },
         "builtinRules": {
           "tag": "توکار",
-          "bypassLan": "دور زدن شبکه محلی",
-          "blockAds": "مسدودسازی تبلیغات و سایت‌های مخرب",
+          "bypassLan": "دور زدن LAN",
+          "blockAds": "مسدودسازی تبلیغات و بدافزار",
           "bypassRegion": "دور زدن سایت‌های $region"
         },
         "appBasedRouting": {
@@ -427,7 +428,10 @@
           "title": "استراتژی Balancer",
           "roundRobin": "Round robin",
           "consistentHash": "Consistent hash",
-          "stickySession": "Sticky session"
+          "stickySession": "Sticky session",
+          "roundRobinDescription": "هر اتصال از سرور بعدی استفاده می‌کند، پس سایت‌ها ممکن است تغییر IP شما را ببینند",
+          "consistentHashDescription": "هر سایت همیشه از همان سرور استفاده می‌کند",
+          "stickySessionDescription": "هر سایت تا اتصال دوباره، یک سرور تصادفی را نگه می‌دارد"
         },
         "resolveDestination": "تحلیل آدرس مقصد",
         "ipv6Route": "مسیریابی IPv6",
@@ -478,8 +482,8 @@
         "directPort": "پورت مستقیم",
         "redirectPort": "پورت تغییر مسیر",
         "lanSharing": "اشتراک امن VPN",
-        "copyLink": "کپی لینک",
         "qrCode": "کد QR",
+        "lanQrSubtitle": "پروکسی SOCKS5 برای همین وای‌فای",
         "lanIPError": "خطا در دریافت آدرس IP محلی"
       },
       "tlsTricks": {
@@ -719,16 +723,28 @@
       "askEachTime": "هر بار بپرس",
       "alertMessage": "پنهان کردن یا خروج از برنامه؟",
       "remember": "انتخابم را به خاطر بسپار"
+    },
+    "qrCode": {
+      "copyFullLink": "کپی لینک کامل",
+      "copied": "کپی شد",
+      "ip": "IP",
+      "port": "پورت",
+      "username": "نام کاربری",
+      "password": "رمز عبور",
+      "showPassword": "نمایش رمز عبور",
+      "hidePassword": "پنهان کردن رمز عبور"
     }
   },
   "connection": {
     "tapToConnect": "برای اتصال ضربه بزنید",
     "connect": "اتصال",
     "connecting": "در حال اتصال…",
-    "hotReloading": "در حال بارگذاری مجدد…",
+    "hotReloading": "در حال اعمال تغییرات…",
     "connected": "متصل شد",
     "disconnect": "قطع اتصال",
     "disconnecting": "در حال قطع اتصال…",
+    "failed": "اتصال برقرار نشد",
+    "tapToRetry": "برای تلاش دوباره ضربه بزنید",
     "reconnect": "اتصال مجدد",
     "reconnectMsg": "در حال اتصال مجدد برای اعمال تغییرات…"
   },
@@ -757,7 +773,9 @@
     "singbox": {
       "serviceNotRunning": "سرویس در حال اجرا نیست",
       "missingPrivilege": "دسترسی وجود ندارد",
-      "missingPrivilegeMsg": "حالت VPN به دسترسی ادمین نیاز دارد. یا برنامه را به عنوان ادمین مجدداً راه‌اندازی کنید یا حالت سرویس را تغییر دهید.",
+      "missingPrivilegeMsg": "حالت VPN نمی‌تواند شروع شود. برنامه را دوباره به عنوان ادمین اجرا کنید یا حالت سرویس را تغییر دهید.",
+      "tunAddressInUse": "VPN دیگری فعال است",
+      "tunAddressInUseMsg": "حالت VPN نمی‌تواند شروع شود. VPN دیگر را خاموش کنید یا حالت سرویس را تغییر دهید.",
       "invalidConfigOptions": "گزینه‌های پیکربندی نامعتبر",
       "invalidConfig": "پیکربندی نامعتبر"
     },

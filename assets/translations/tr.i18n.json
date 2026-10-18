@@ -112,6 +112,7 @@
       "empty": "Kullanılabilir proxy yok",
       "activeProxy": "Aktif proxy",
       "unknownIp": "Bilinmeyen IP",
+      "switchFailed": "Bu proxy'ye geçilemedi. Tekrar deneyin.",
       "sortOptions": {
         "unsorted": "Varsayılan",
         "name": "Alfabetik",
@@ -337,8 +338,8 @@
         },
         "builtinRules": {
           "tag": "Yerleşik",
-          "bypassLan": "Yerel ağı atla",
-          "blockAds": "Reklamları ve zararlı siteleri engelle",
+          "bypassLan": "LAN'ı atla",
+          "blockAds": "Reklam ve zararlı yazılımı engelle",
           "bypassRegion": "$region sitelerini atla"
         },
         "appBasedRouting": {
@@ -426,7 +427,10 @@
           "title": "Balancer stratejisi",
           "roundRobin": "Round robin",
           "consistentHash": "Consistent hash",
-          "stickySession": "Sticky session"
+          "stickySession": "Sticky session",
+          "roundRobinDescription": "Her bağlantı sıradaki sunucuyu kullanır, bu yüzden siteler IP adresinizin değiştiğini görebilir",
+          "consistentHashDescription": "Her site her zaman aynı sunucuyu kullanır",
+          "stickySessionDescription": "Her site, yeniden bağlanana kadar rastgele bir sunucuda kalır"
         },
         "resolveDestination": "Hedefi çözümle",
         "ipv6Route": "IPv6 rotası",
@@ -477,8 +481,8 @@
         "directPort": "Direct portu",
         "redirectPort": "Yönlendirme portu",
         "lanSharing": "Güvenli VPN paylaşımı",
-        "copyLink": "Bağlantıyı kopyala",
         "qrCode": "QR kod",
+        "lanQrSubtitle": "Bu Wi-Fi için SOCKS5 proxy",
         "lanIPError": "Yerel IP adresi alınamadı"
       },
       "tlsTricks": {
@@ -717,15 +721,28 @@
       "askEachTime": "Her seferinde sor",
       "alertMessage": "Uygulama gizlensin mi, kapatılsın mı?",
       "remember": "Seçimimi hatırla"
+    },
+    "qrCode": {
+      "copyFullLink": "Tam bağlantıyı kopyala",
+      "copied": "Kopyalandı",
+      "ip": "IP",
+      "port": "Port",
+      "username": "Kullanıcı adı",
+      "password": "Şifre",
+      "showPassword": "Şifreyi göster",
+      "hidePassword": "Şifreyi gizle"
     }
   },
   "connection": {
     "tapToConnect": "Bağlanmak için dokunun",
     "connect": "Bağlan",
     "connecting": "Bağlanıyor…",
+    "hotReloading": "Değişiklikler uygulanıyor…",
     "connected": "Bağlı",
     "disconnect": "Bağlantıyı kes",
     "disconnecting": "Bağlantı kesiliyor…",
+    "failed": "Bağlanılamadı",
+    "tapToRetry": "Tekrar denemek için dokunun",
     "reconnect": "Yeniden bağlan",
     "reconnectMsg": "Değişiklikleri uygulamak için yeniden bağlanılıyor…"
   },
@@ -754,7 +771,9 @@
     "singbox": {
       "serviceNotRunning": "Servis çalışmıyor",
       "missingPrivilege": "Eksik yetki",
-      "missingPrivilegeMsg": "VPN modu yönetici yetkisi gerektirir. Lütfen uygulamayı yönetici olarak yeniden başlatın veya servis modunu değiştirin.",
+      "missingPrivilegeMsg": "VPN modu başlatılamıyor. Uygulamayı yönetici olarak yeniden başlatın veya servis modunu değiştirin.",
+      "tunAddressInUse": "Başka bir VPN etkin",
+      "tunAddressInUseMsg": "VPN modu başlatılamıyor. Diğer VPN'i kapatın veya servis modunu değiştirin.",
       "invalidConfigOptions": "Geçersiz yapılandırma seçenekleri",
       "invalidConfig": "Geçersiz yapılandırma"
     },

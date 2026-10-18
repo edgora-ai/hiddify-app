@@ -27,13 +27,13 @@ import 'package:meta/meta.dart';
 /// - url filename extension (remote only, example: `https://example.com/config.json`) -> name=`config`
 /// - if none of these methods return a non-blank string, switch(profileType)
 /// - remote:  fallback to `Remote Profile`
-/// - local: fallback to protocol, extracted from content by protocol()
+/// - local: keep the existing name, otherwise extract it from content by protocol()
 ///
 /// Note: the url-based steps (fragment, filename) apply to remote profiles only,
 /// since local profiles have no url. Every step treats a whitespace-only result
 /// as blank, so it falls through to the next step.
 
-class ProfileParser {
+class ProfileParser with InfraLogger {
   // Synthetic sentinel assigned to `total` for "unlimited" traffic (subscription-userinfo total=0 or
   // missing). It MUST stay above the 10 TB "unlimited" threshold the UI uses to decide whether to show
   // "∞" (isInfinitSize() in lib/utils/number_formatters.dart, and profile_tile.dart). The previous
@@ -70,30 +70,23 @@ class ProfileParser {
     required String tempFilePath,
     required UserOverride? userOverride,
   }) {
-    return TaskEither.tryCatch(() async {
-          await expandRemoteLinesInParallel(
+    return TaskEither.fromEither(populateHeaders(content: content)).flatMap(
+      (populatedHeaders) => _expandLinksInFile(tempFilePath, null).flatMap(
+        (_) => TaskEither.fromEither(
+          parse(
             tempFilePath: tempFilePath,
-            httpClient: _httpClient,
-            cancelToken: CancelToken(),
-            ref: _ref,
-          );
-        }, (_, _) => const ProfileFailure.unexpected())
-        .flatMap((_) => TaskEither.fromEither(populateHeaders(content: content)))
-        .flatMap(
-          (populatedHeaders) => TaskEither.fromEither(
-            parse(
-              tempFilePath: tempFilePath,
-              profile: ProfileEntity.local(
-                id: id,
-                active: true,
-                name: '',
-                lastUpdate: DateTime.now(),
-                userOverride: userOverride,
-                populatedHeaders: populatedHeaders,
-              ),
-            ).flatMap((profEntity) => Either.tryCatch(() => profEntity.toInsertEntry(), ProfileFailure.unexpected)),
-          ),
-        );
+            profile: ProfileEntity.local(
+              id: id,
+              active: true,
+              name: '',
+              lastUpdate: DateTime.now(),
+              userOverride: userOverride,
+              populatedHeaders: populatedHeaders,
+            ),
+          ).flatMap((profEntity) => Either.tryCatch(() => profEntity.toInsertEntry(), ProfileFailure.unexpected)),
+        ),
+      ),
+    );
   }
 
   TaskEither<ProfileFailure, ProfileEntriesCompanion> addRemote({
@@ -107,19 +100,21 @@ class ProfileParser {
         TaskEither.fromEither(
           populateHeaders(content: File(tempFilePath).readAsStringSync(), remoteHeaders: remoteHeaders),
         ).flatMap(
-          (populatedHeaders) => TaskEither.fromEither(
-            parse(
-              tempFilePath: tempFilePath,
-              profile: ProfileEntity.remote(
-                id: id,
-                active: true,
-                name: '',
-                url: url,
-                lastUpdate: DateTime.now(),
-                userOverride: userOverride,
-                populatedHeaders: populatedHeaders,
-              ),
-            ).flatMap((profEntity) => Either.tryCatch(() => profEntity.toInsertEntry(), ProfileFailure.unexpected)),
+          (populatedHeaders) => _expandLinksInFile(tempFilePath, cancelToken).flatMap(
+            (_) => TaskEither.fromEither(
+              parse(
+                tempFilePath: tempFilePath,
+                profile: ProfileEntity.remote(
+                  id: id,
+                  active: true,
+                  name: '',
+                  url: url,
+                  lastUpdate: DateTime.now(),
+                  userOverride: userOverride,
+                  populatedHeaders: populatedHeaders,
+                ),
+              ).flatMap((profEntity) => Either.tryCatch(() => profEntity.toInsertEntry(), ProfileFailure.unexpected)),
+            ),
           ),
         ),
   );
@@ -133,11 +128,13 @@ class ProfileParser {
         TaskEither.fromEither(
           populateHeaders(content: File(tempFilePath).readAsStringSync(), remoteHeaders: remoteHeaders),
         ).flatMap(
-          (populatedHeaders) => TaskEither.fromEither(
-            parse(
-              tempFilePath: tempFilePath,
-              profile: rp.copyWith(populatedHeaders: populatedHeaders),
-            ).flatMap((profEntity) => Either.tryCatch(() => profEntity.toUpdateEntry(), ProfileFailure.unexpected)),
+          (populatedHeaders) => _expandLinksInFile(tempFilePath, cancelToken).flatMap(
+            (_) => TaskEither.fromEither(
+              parse(
+                tempFilePath: tempFilePath,
+                profile: rp.copyWith(populatedHeaders: populatedHeaders),
+              ).flatMap((profEntity) => Either.tryCatch(() => profEntity.toUpdateEntry(), ProfileFailure.unexpected)),
+            ),
           ),
         ),
   );
@@ -175,30 +172,21 @@ class ProfileParser {
           }
           throw err;
         });
-    await expandRemoteLinesInParallel(
-      tempFilePath: tempFilePath,
-      httpClient: _httpClient,
-      cancelToken: cancelToken ?? CancelToken(),
-      ref: _ref,
-    );
     // fixing headers before return
     return rs.headers.map.map((key, value) {
       if (value.length == 1) return MapEntry(key, value.first);
       return MapEntry(key, value);
     });
   }, (err, st) => err is ProfileFailure ? err : ProfileFailure.unexpected(err, st));
-  Future<void> expandRemoteLinesInParallel({
-    required String tempFilePath,
-    required DioHttpClient httpClient,
-    required CancelToken cancelToken,
-    required Ref ref,
-    int parallelism = 4,
-  }) async {
-    final content = await File(tempFilePath).readAsString();
-    final lines = content.split('\n');
+
+  /// Replaces every subscription link line in [text] with the content it points to.
+  ///
+  /// Returns [text] unchanged when no line is a link.
+  Future<String> expandLinks(String text, CancelToken cancelToken) async {
+    final lines = text.split('\n');
+    if (!lines.any(_isSubscriptionLink)) return text;
 
     final results = List<String?>.filled(lines.length, null);
-
     int index = 0;
 
     Future<void> worker() async {
@@ -209,43 +197,57 @@ class ProfileParser {
         if (currentIndex >= lines.length) return;
 
         final line = lines[currentIndex];
-
-        // Non-URL
-        if (!line.startsWith('http://') && !line.startsWith('https://')) {
-          results[currentIndex] = line.trim();
+        if (!_isSubscriptionLink(line)) {
+          results[currentIndex] = line;
           continue;
         }
 
         try {
-          final tmpPath = '$tempFilePath.$currentIndex';
-
-          await httpClient.download(
-            line,
-            tmpPath,
+          final response = await _httpClient.get<String>(
+            line.trimRight(),
             cancelToken: cancelToken,
-            userAgent: ref.read(ConfigOptions.useXrayCoreWhenPossible)
-                ? httpClient.userAgent.replaceAll('HiddifyNext', 'HiddifyNextX')
+            userAgent: _ref.read(ConfigOptions.useXrayCoreWhenPossible)
+                ? _httpClient.userAgent.replaceAll('HiddifyNext', 'HiddifyNextX')
                 : null,
+            responseType: ResponseType.plain,
           );
-
-          results[currentIndex] = (await File(tmpPath).readAsString()).trim();
+          results[currentIndex] = (response.data ?? '').trim();
         } catch (err) {
-          if (err is DioException && CancelToken.isCancel(err)) {
-            return;
-          }
+          if (err is DioException && CancelToken.isCancel(err)) return;
+          // the full url carries the user's token, so only the host is logged
+          loggy.warning(
+            'dropped an inner subscription link that failed to download: ${Uri.tryParse(line.trimRight())?.host}',
+          );
           results[currentIndex] = '';
         }
       }
     }
 
-    // Start workers
-    await Future.wait(List.generate(parallelism, (_) => worker()));
-
-    if (results.any((e) => e != null)) {
-      final newContent = results.join("\n");
-      await File(tempFilePath).writeAsString(newContent);
+    // 4 downloads at a time
+    await Future.wait(List.generate(4, (_) => worker()));
+    if (cancelToken.isCancelled) {
+      throw const ProfileFailure.cancelByUser('HTTP request for getting an inner subscription link canceled by user.');
     }
+    return results.join('\n');
   }
+
+  /// An http(s) line is a subscription link only when its URL has a path. HTTP proxy links have none: the core reads
+  /// their options from the query.
+  static bool _isSubscriptionLink(String line) {
+    if (!line.startsWith('http://') && !line.startsWith('https://')) return false;
+    final path = Uri.tryParse(line.trimRight())?.path ?? '';
+    return path.isNotEmpty && path != '/';
+  }
+
+  /// Expands the links in the temp file and writes the file once, only if the text changed.
+  TaskEither<ProfileFailure, Unit> _expandLinksInFile(String tempFilePath, CancelToken? cancelToken) =>
+      TaskEither.tryCatch(() async {
+        final file = File(tempFilePath);
+        final text = safeDecodeBase64((await file.readAsString()).trim());
+        final expanded = await expandLinks(text, cancelToken ?? CancelToken());
+        if (expanded != text) await file.writeAsString(expanded);
+        return unit;
+      }, (err, st) => err is ProfileFailure ? err : ProfileFailure.unexpected(err, st));
 
   static Either<ProfileFailure, Map<String, dynamic>> populateHeaders({
     required String content,
@@ -381,7 +383,10 @@ class ProfileParser {
               name = "Remote Profile";
 
             case LocalProfileEntity():
-              name = protocol(File(tempFilePath).readAsStringSync());
+              // The editor saves generated JSON, so the original link fragment
+              // is no longer available. Keep the profile name independently of
+              // outbound tags unless an override or header supplies a new name.
+              name = profile.name.isNotBlank ? profile.name : protocol(File(tempFilePath).readAsStringSync());
           }
         }
 

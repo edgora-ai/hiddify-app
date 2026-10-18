@@ -33,10 +33,16 @@ class LogsOverviewNotifier extends _$LogsOverviewNotifier with AppLogger {
     _startPolling();
 
     // Deliberately not _view(): that reads `state`, which does not exist until
-    // this method returns. A bare instance carries the same defaults, so the
+    // this method returns. The first state carries the same filters, so the
     // first view is filtered the same way every later one is.
+    //
+    // Read, not watched: the filters below write these preferences, and a
+    // watch would rebuild the notifier on every pick, losing the search text.
     _drawn = logRing.revision;
-    const initial = LogsOverviewState();
+    final initial = LogsOverviewState(
+      minLevel: ref.read(Preferences.logFilterLevel),
+      category: ref.read(Preferences.logFilterCategory),
+    );
     return initial.copyWith(
       logs: logRing.view(
         minLevel: initial.minLevel,
@@ -93,16 +99,20 @@ class LogsOverviewNotifier extends _$LogsOverviewNotifier with AppLogger {
     state = state.copyWith(logs: _view());
   }
 
-  void filterLevel(Level level) {
+  /// Saved, so the page opens on this level next time.
+  Future<void> filterLevel(Level level) async {
     state = state.copyWith(minLevel: level);
     state = state.copyWith(logs: _view());
+    await ref.read(Preferences.logFilterLevel.notifier).update(level);
   }
 
-  void filterCategory(LogCategory? category) {
+  /// Saved, so the page opens on this category next time.
+  Future<void> filterCategory(LogCategory? category) async {
     state = category == null
         ? state.copyWith(clearCategory: true)
         : state.copyWith(category: category);
     state = state.copyWith(logs: _view());
+    await ref.read(Preferences.logFilterCategory.notifier).update(category);
   }
 
   /// How many records the ring keeps. Saved, so the size survives a restart —

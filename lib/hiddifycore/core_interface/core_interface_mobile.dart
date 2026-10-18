@@ -32,19 +32,20 @@ class CoreInterfaceMobile extends CoreInterface with InfraLogger {
   bool _debug = false;
 
   late LastStream<CoreStatus> _status;
+  ClientChannel? _fgChannel;
+  ClientChannel? _bgChannel;
   @override
   Future<String> setup(Directories directories, bool debug, int mode) async {
     final channelOption = [1, 2].contains(mode)
         ? MTLSChannelCredentials(serverPublicKey: serverPublicKey, clientKey: cert)
         : const ChannelCredentials.insecure();
     _debug = debug;
-    final helloClient = HelloClient(
-      ClientChannel(
-        '127.0.0.1',
-        port: portFront,
-        options: ChannelOptions(credentials: channelOption),
-      ),
+    final helloChannel = ClientChannel(
+      '127.0.0.1',
+      port: portFront,
+      options: ChannelOptions(credentials: channelOption),
     );
+    final helloClient = HelloClient(helloChannel);
     final status = statusChannel.receiveBroadcastStream().map(CoreStatus.fromEvent);
     final alerts = alertsChannel.receiveBroadcastStream().map(CoreStatus.fromEvent);
 
@@ -65,6 +66,8 @@ class CoreInterfaceMobile extends CoreInterface with InfraLogger {
       });
       final res = await helloClient.sayHello(HelloRequest(name: "test"));
       loggy.info(res.toString());
+    } finally {
+      unawaited(helloChannel.shutdown());
     }
 
     // serverPublicKey = await methodChannel.invokeMethod<Uint8List>("get_grpc_server_public_key") ?? Uint8List.fromList([]);
@@ -78,21 +81,26 @@ class CoreInterfaceMobile extends CoreInterface with InfraLogger {
     // var chanelOption = ChannelOptions(
     //   credentials: MTLSChannelCredentials(serverPublicKey: serverPublicKey, clientPrivateKey: cert.privateKey as ECPrivateKey),
     // );
-    fgClient = CoreClient(
-      ClientChannel(
-        '127.0.0.1',
-        port: portFront,
-        options: ChannelOptions(credentials: channelOption),
-      ),
+    // setup runs again every time the app is resumed. The channels it replaces
+    // used to stay open until their idle timeout, so each resume left one more
+    // connection to the VPN extension, which has a tight memory cap on iOS.
+    // shutdown is graceful: calls still running on them finish first.
+    final previousChannels = [_fgChannel, _bgChannel];
+    _fgChannel = ClientChannel(
+      '127.0.0.1',
+      port: portFront,
+      options: ChannelOptions(credentials: channelOption),
     );
-
-    bgClient = CoreClient(
-      ClientChannel(
-        '127.0.0.1',
-        port: portBack,
-        options: ChannelOptions(credentials: channelOption),
-      ),
+    _bgChannel = ClientChannel(
+      '127.0.0.1',
+      port: portBack,
+      options: ChannelOptions(credentials: channelOption),
     );
+    fgClient = CoreClient(_fgChannel!);
+    bgClient = CoreClient(_bgChannel!);
+    for (final channel in previousChannels) {
+      unawaited(channel?.shutdown());
+    }
     // await start("/sdcard/Android/data/app.hiddify.com/files/configs/cdc633e9-8cfc-4a67-948d-009f779a5c91.json", "hiddify");
     return "";
   }

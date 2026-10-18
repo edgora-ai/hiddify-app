@@ -110,7 +110,8 @@ class ForegroundProfilesUpdateNotifier extends _$ForegroundProfilesUpdateNotifie
         }
       }
 
-      if (successCount > 0 || failedNames.isNotEmpty) {
+      // Only a manual run (forced) reports; the periodic background run stays silent.
+      if (force && (successCount > 0 || failedNames.isNotEmpty)) {
         final t = ref.read(translationsProvider).requireValue;
         final notification = ref.read(inAppNotificationControllerProvider);
         if (failedNames.isEmpty) {

@@ -112,6 +112,7 @@
       "empty": "无可用代理",
       "activeProxy": "当前代理",
       "unknownIp": "未知 IP",
+      "switchFailed": "无法切换到此代理。请重试。",
       "sortOptions": {
         "unsorted": "默认",
         "name": "按名称",
@@ -338,7 +339,7 @@
         "builtinRules": {
           "tag": "内置",
           "bypassLan": "绕过局域网",
-          "blockAds": "拦截广告和有害网站",
+          "blockAds": "拦截广告和恶意软件",
           "bypassRegion": "绕过${region}的网站"
         },
         "appBasedRouting": {
@@ -426,7 +427,10 @@
           "title": "Balancer 策略",
           "roundRobin": "Round robin",
           "consistentHash": "Consistent hash",
-          "stickySession": "Sticky session"
+          "stickySession": "Sticky session",
+          "roundRobinDescription": "每个连接依次使用下一个服务器，网站可能会看到您的 IP 变化",
+          "consistentHashDescription": "每个网站始终使用同一个服务器",
+          "stickySessionDescription": "每个网站使用一个随机服务器，直到您重新连接"
         },
         "resolveDestination": "解析目的地",
         "ipv6Route": "IPv6 路由",
@@ -477,8 +481,8 @@
         "directPort": "本地直连端口",
         "redirectPort": "重定向端口",
         "lanSharing": "安全 VPN 共享",
-        "copyLink": "复制链接",
         "qrCode": "二维码",
+        "lanQrSubtitle": "适用于此 Wi-Fi 的 SOCKS5 代理",
         "lanIPError": "获取本地 IP 地址失败"
       },
       "tlsTricks": {
@@ -717,15 +721,28 @@
       "askEachTime": "每次询问",
       "alertMessage": "隐藏还是退出应用？",
       "remember": "记住我的选择"
+    },
+    "qrCode": {
+      "copyFullLink": "复制完整链接",
+      "copied": "已复制",
+      "ip": "IP",
+      "port": "端口",
+      "username": "用户名",
+      "password": "密码",
+      "showPassword": "显示密码",
+      "hidePassword": "隐藏密码"
     }
   },
   "connection": {
     "tapToConnect": "点击连接",
     "connect": "连接",
     "connecting": "连接中…",
+    "hotReloading": "应用更改中…",
     "connected": "已连接",
     "disconnect": "断开连接",
     "disconnecting": "断开连接中…",
+    "failed": "无法连接",
+    "tapToRetry": "点击重试",
     "reconnect": "重新连接",
     "reconnectMsg": "正在重新连接以应用更改…"
   },
@@ -754,7 +771,9 @@
     "singbox": {
       "serviceNotRunning": "服务未运行",
       "missingPrivilege": "缺少权限",
-      "missingPrivilegeMsg": "VPN 模式需要管理员权限。请以管理员身份重新启动应用，或更改服务模式。",
+      "missingPrivilegeMsg": "VPN 模式无法启动。请以管理员身份重新启动应用，或更改服务模式。",
+      "tunAddressInUse": "另一个 VPN 正在运行",
+      "tunAddressInUseMsg": "VPN 模式无法启动。请关闭另一个 VPN，或更改服务模式。",
       "invalidConfigOptions": "配置选项无效",
       "invalidConfig": "配置无效"
     },

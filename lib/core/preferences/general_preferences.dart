@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:hiddify/core/logger/ring/log_ring.dart';
 import 'package:hiddify/core/model/region.dart';
 import 'package:hiddify/core/preferences/actions_at_closing.dart';
 import 'package:hiddify/core/utils/preferences_utils.dart';
@@ -8,6 +9,7 @@ import 'package:hiddify/features/profile/model/profile_sort_enum.dart';
 import 'package:hiddify/features/window/notifier/window_notifier.dart';
 import 'package:hiddify/utils/platform_utils.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:logging/logging.dart';
 
 bool _debugIntroPage = false;
 
@@ -34,7 +36,7 @@ abstract class Preferences {
   );
 
   // Set when the user turns auto selection off by hand. Until then it comes on by itself when App-based routing
-  // is turned on or its mode changes.
+  // is turned on.
   static final autoAppsSelectionOffByUser = PreferencesNotifier.create<bool, bool>(
     "auto_apps_selection_off_by_user",
     false,
@@ -123,6 +125,27 @@ abstract class Preferences {
   /// How many records the in-memory log ring keeps. Saved, so a size picked
   /// once while chasing a bug is still there on the next run.
   static final logBufferSize = PreferencesNotifier.create<int, int>("log-buffer-size", 1000);
+
+  /// The level filter on the logs page. Saved, so the page opens on the level
+  /// picked last time.
+  ///
+  /// Starts at warn: below that the page is mostly the app narrating itself,
+  /// which buries the lines somebody opened this page to find.
+  static final logFilterLevel = PreferencesNotifier.create<Level, String>(
+    "log-filter-level",
+    Level.WARNING,
+    mapFrom: (value) => Level.LEVELS.firstWhere((level) => level.name == value),
+    mapTo: (value) => value.name,
+  );
+
+  /// The category filter on the logs page, saved the same way. Null shows every
+  /// category.
+  static final logFilterCategory = PreferencesNotifier.create<LogCategory?, String?>(
+    "log-filter-category",
+    null,
+    mapFrom: (value) => value == null || value.isEmpty ? null : LogCategory.values.byName(value),
+    mapTo: (value) => value == null ? '' : value.name,
+  );
 
   static final profilesSort = PreferencesNotifier.create<({ProfilesSort by, SortMode mode}), String>(
     "profiles_sort",

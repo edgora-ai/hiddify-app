@@ -185,14 +185,25 @@ class HiddifyCoreService with InfraLogger {
       } on GrpcError catch (e) {
         loggy.error("failed to start bg core: $e");
         ref.read(coreRestartSignalProvider.notifier).restart();
+        final message = e.message ?? "";
         if (e.code == StatusCode.unavailable) {
           return left(const ConnectionFailure.unexpected("background core is not started yet!"));
         }
-        // throw InvalidConfig(e.message);
-        // throw DioException.connectionError(requestOptions: RequestOptions(), reason: e.codeName, error: e);
-
-        // throw DioException(requestOptions: RequestOptions(), error: e);
-        return left(const ConnectionFailure.unexpected("failed to start background core"));
+        if (message.isEmpty) {
+          return left(const ConnectionFailure.unexpected("failed to start background core"));
+        }
+        // Go words Windows errors in English, so the two texts below match on every system language.
+        // Windows refuses the TUN adapter to a process that is not elevated.
+        if (message.contains("start inbound/tun[tun-in]: configure tun interface: Access is denied.")) {
+          return left(const ConnectionFailure.missingPrivilege());
+        }
+        // Another adapter already has the address the core gives its TUN (172.19.0.1).
+        if (message.contains(
+          "start inbound/tun[tun-in]: configure tun interface: set ipv4 address: The object already exists.",
+        )) {
+          return left(const ConnectionFailure.tunAddressInUse());
+        }
+        return left(ConnectionFailure.unexpected(message));
       }
 
       // if (res.messageType != MessageType.EMPTY) return left(res);

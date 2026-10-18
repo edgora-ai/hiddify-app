@@ -167,20 +167,28 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
       loggy.info("no active profile, not connecting");
       return;
     }
+    // Read before connecting: a failed start sends the core restart signal, which marks this
+    // notifier out of date until the next frame, and debug builds refuse any ref call until then.
+    final dialogs = ref.read(dialogNotifierProvider.notifier);
+    final t = ref.read(translationsProvider).requireValue;
+    final startedByUser = ref.read(Preferences.startedByUser.notifier);
+    // The core reports Starting only once the config is built, about a second
+    // later; the app is connecting from here on.
+    state = const AsyncData(Connecting());
     await _connectionRepo.connect(activeProfile, ref.read(Preferences.disableMemoryLimit)).mapLeft((
       ConnectionFailure err,
     ) async {
       loggy.warning("error connecting", err);
+      // Before the dialog: a status the core sends while it is open, such as a
+      // late Started, must win over this error, not be overwritten by it.
+      state = AsyncError(err, StackTrace.current);
       //Go err is not normal object to see the go errors are string and need to be dumped
-      await ref
-          .read(dialogNotifierProvider.notifier)
-          .showCustomAlertFromErr(err.present(ref.read(translationsProvider).requireValue));
+      await dialogs.showCustomAlertFromErr(err.present(t));
       loggy.warning(err);
       if (err.toString().contains("panic")) {
         await Sentry.captureException(Exception(err.toString()));
       }
-      await ref.read(Preferences.startedByUser.notifier).update(false);
-      state = AsyncError(err, StackTrace.current);
+      await startedByUser.update(false);
     }).run();
   }
 

@@ -43,7 +43,7 @@ class FixBtns extends ConsumerWidget {
           onTap: () async {
             final result = await FilePicker.platform.pickFiles(
               type: FileType.custom,
-              allowedExtensions: ['txt', 'json', 'yaml', 'yml', 'conf', 'ovpn'],
+              allowedExtensions: ['txt', 'json', 'yaml', 'yml', 'conf', 'ovpn', 'zip'],
             );
             if (result == null) return;
             final picked = result.files.single;
@@ -55,7 +55,12 @@ class FixBtns extends ConsumerWidget {
               if (!await file.exists()) return;
               bytes = await file.readAsBytes();
             }
-            ref.read(addProfileNotifierProvider.notifier).addClipboard(decodeTextBytes(bytes));
+            final notifier = ref.read(addProfileNotifierProvider.notifier);
+            if (picked.extension?.toLowerCase() == 'zip') {
+              notifier.addArchive(bytes, name: picked.name.replaceFirst(RegExp(r'\.zip$', caseSensitive: false), ''));
+            } else {
+              notifier.addClipboard(decodeTextBytes(bytes));
+            }
           },
         ),
         if (!isDesktop) ...[

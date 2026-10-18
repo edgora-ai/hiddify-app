@@ -112,6 +112,7 @@
       "empty": "No hay proxies disponibles",
       "activeProxy": "Proxy activo",
       "unknownIp": "IP desconocida",
+      "switchFailed": "No se pudo cambiar a este proxy. Vuelve a intentarlo.",
       "sortOptions": {
         "unsorted": "Por defecto",
         "name": "Alfabéticamente",
@@ -338,8 +339,8 @@
         },
         "builtinRules": {
           "tag": "Integrada",
-          "bypassLan": "Omitir red local",
-          "blockAds": "Bloquear anuncios y sitios dañinos",
+          "bypassLan": "Omitir LAN",
+          "blockAds": "Bloquear anuncios y malware",
           "bypassRegion": "Omitir sitios de $region"
         },
         "appBasedRouting": {
@@ -427,7 +428,10 @@
           "title": "Estrategia de Balancer",
           "roundRobin": "Round robin",
           "consistentHash": "Consistent hash",
-          "stickySession": "Sticky session"
+          "stickySession": "Sticky session",
+          "roundRobinDescription": "Cada conexión usa el siguiente servidor, así que los sitios pueden ver que tu IP cambia",
+          "consistentHashDescription": "Cada sitio usa siempre el mismo servidor",
+          "stickySessionDescription": "Cada sitio mantiene un servidor aleatorio hasta que te vuelvas a conectar"
         },
         "resolveDestination": "Resolver destino",
         "ipv6Route": "Ruta IPv6",
@@ -478,8 +482,8 @@
         "directPort": "Puerto directo",
         "redirectPort": "Puerto de redirección",
         "lanSharing": "Compartir VPN de forma segura",
-        "copyLink": "Copiar enlace",
         "qrCode": "Código QR",
+        "lanQrSubtitle": "Proxy SOCKS5 para esta red Wi-Fi",
         "lanIPError": "Error al obtener la IP local"
       },
       "tlsTricks": {
@@ -719,15 +723,28 @@
       "askEachTime": "Preguntar cada vez",
       "alertMessage": "¿Ocultar o salir de la app?",
       "remember": "Recordar mi elección"
+    },
+    "qrCode": {
+      "copyFullLink": "Copiar enlace completo",
+      "copied": "Copiado",
+      "ip": "IP",
+      "port": "Puerto",
+      "username": "Nombre de usuario",
+      "password": "Contraseña",
+      "showPassword": "Mostrar contraseña",
+      "hidePassword": "Ocultar contraseña"
     }
   },
   "connection": {
     "tapToConnect": "Toca para conectar",
     "connect": "Conectar",
     "connecting": "Conectando…",
+    "hotReloading": "Aplicando cambios…",
     "connected": "Conectado",
     "disconnect": "Desconectar",
     "disconnecting": "Desconectando…",
+    "failed": "No se pudo conectar",
+    "tapToRetry": "Toca para volver a intentarlo",
     "reconnect": "Reconectar",
     "reconnectMsg": "Reconectando para aplicar los cambios…"
   },
@@ -756,7 +773,9 @@
     "singbox": {
       "serviceNotRunning": "El servicio no se está ejecutando",
       "missingPrivilege": "Falta privilegio",
-      "missingPrivilegeMsg": "El modo VPN requiere privilegios de administrador. Reinicia la aplicación como administrador o cambia el modo de servicio.",
+      "missingPrivilegeMsg": "El modo VPN no puede iniciarse. Reinicia la aplicación como administrador o cambia el modo de servicio.",
+      "tunAddressInUse": "Hay otra VPN activa",
+      "tunAddressInUseMsg": "El modo VPN no puede iniciarse. Desactiva la otra VPN o cambia el modo de servicio.",
       "invalidConfigOptions": "Opciones de configuración no válidas",
       "invalidConfig": "Configuración no válida"
     },

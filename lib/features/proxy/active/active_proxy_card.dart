@@ -96,13 +96,16 @@ class ActiveProxyFooter extends ConsumerWidget with InfraLogger {
                         IPText(ip: activeProxy.ipinfo.ip, onLongPress: handleUrlTest, constrained: true)
                       else
                         UnknownIPText(text: t.pages.proxies.unknownIp, onTap: handleUrlTest),
-                      const Spacer(),
-                      Text(
-                        // getRealOutboundTag(activeProxy),
-                        activeProxy.type,
-                        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          // getRealOutboundTag(activeProxy),
+                          activeProxy.type,
+                          style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.end,
+                        ),
                       ),
                     ],
                   ),

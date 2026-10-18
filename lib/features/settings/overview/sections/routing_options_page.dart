@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_flags/circle_flags.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
@@ -502,6 +504,7 @@ class _PinnedOptions extends ConsumerWidget {
           choices: BalancerStrategy.values,
           present: (value) => value.present(t),
           onSelected: ref.read(ConfigOptions.balancerStrategy.notifier).update,
+          describe: (value) => value.describe(t),
         ),
         divider,
         SwitchListTile.adaptive(
@@ -531,6 +534,7 @@ class _MenuOption<T> extends HookWidget {
     required this.choices,
     required this.present,
     required this.onSelected,
+    this.describe,
   });
 
   final String title;
@@ -538,14 +542,23 @@ class _MenuOption<T> extends HookWidget {
   final List<T> choices;
   final String Function(T value) present;
   final ValueChanged<T> onSelected;
+  final String Function(T value)? describe;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color = theme.colorScheme.onSurfaceVariant;
     final menu = useMemoized(GlobalKey<PopupMenuButtonState<T>>.new);
+    // the description shows for a few seconds after a pick; a new pick restarts the count
+    final picked = useState(false);
+    useEffect(() {
+      if (!picked.value) return null;
+      final hide = Timer(const Duration(seconds: 8), () => picked.value = false);
+      return hide.cancel;
+    }, [picked.value, selected]);
     return ListTile(
       title: Text(title),
+      subtitle: describe != null && picked.value ? Text(describe!(selected)) : null,
       // the row takes the tap, so all of it ripples
       onTap: () => menu.currentState?.showButtonMenu(),
       trailing: IgnorePointer(
@@ -553,7 +566,10 @@ class _MenuOption<T> extends HookWidget {
         child: PopupMenuButton<T>(
           key: menu,
           position: PopupMenuPosition.under,
-          onSelected: onSelected,
+          onSelected: (value) {
+            picked.value = true;
+            onSelected(value);
+          },
           itemBuilder: (_) => [
             for (final choice in choices)
               PopupMenuItem(

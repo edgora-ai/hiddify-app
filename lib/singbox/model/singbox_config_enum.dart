@@ -67,6 +67,12 @@ enum BalancerStrategy {
     consistentHash => t.pages.settings.routing.balancerStrategy.consistentHash,
     stickySession => t.pages.settings.routing.balancerStrategy.stickySession,
   };
+
+  String describe(TranslationsEn t) => switch (this) {
+    roundRobin => t.pages.settings.routing.balancerStrategy.roundRobinDescription,
+    consistentHash => t.pages.settings.routing.balancerStrategy.consistentHashDescription,
+    stickySession => t.pages.settings.routing.balancerStrategy.stickySessionDescription,
+  };
 }
 
 @JsonEnum(valueField: 'key')

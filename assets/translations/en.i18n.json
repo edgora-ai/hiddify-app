@@ -112,6 +112,7 @@
       "empty": "No proxies available",
       "activeProxy": "Active proxy",
       "unknownIp": "Unknown IP",
+      "switchFailed": "Couldn’t switch to this proxy. Try again.",
       "sortOptions": {
         "unsorted": "Default",
         "name": "Alphabetically",
@@ -339,8 +340,8 @@
         },
         "builtinRules": {
           "tag": "Built-in",
-          "bypassLan": "Bypass local network",
-          "blockAds": "Block ads and harmful sites",
+          "bypassLan": "Bypass LAN",
+          "blockAds": "Block ads and malware",
           "bypassRegion": "Bypass sites in $region"
         },
         "appBasedRouting": {
@@ -428,7 +429,10 @@
           "title": "Balancer strategy",
           "roundRobin": "Round robin",
           "consistentHash": "Consistent hash",
-          "stickySession": "Sticky session"
+          "stickySession": "Sticky session",
+          "roundRobinDescription": "Each connection uses the next server, so sites may see your IP change",
+          "consistentHashDescription": "Each site always uses the same server",
+          "stickySessionDescription": "Each site keeps a random server until you reconnect"
         },
         "resolveDestination": "Resolve destination",
         "ipv6Route": "IPv6 route",
@@ -479,8 +483,8 @@
         "directPort": "Direct port",
         "redirectPort": "Redirect port",
         "lanSharing": "Secure VPN sharing",
-        "copyLink": "Copy link",
         "qrCode": "QR code",
+        "lanQrSubtitle": "SOCKS5 proxy for this Wi-Fi",
         "lanIPError": "Failed to get local IP address"
       },
       "tlsTricks": {
@@ -825,16 +829,28 @@
       "changeProtocolMessage": "Credential fields for the current protocol will be cleared",
       "shareWarningTitle": "Some settings can’t be shared",
       "shareWarningMessage": "This link doesn’t include ${fields}"
+    },
+    "qrCode": {
+      "copyFullLink": "Copy full link",
+      "copied": "Copied",
+      "ip": "IP",
+      "port": "Port",
+      "username": "Username",
+      "password": "Password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password"
     }
   },
   "connection": {
     "tapToConnect": "Tap to connect",
     "connect": "Connect",
     "connecting": "Connecting…",
-    "hotReloading": "Hot reloading…",
+    "hotReloading": "Applying changes…",
     "connected": "Connected",
     "disconnect": "Disconnect",
     "disconnecting": "Disconnecting…",
+    "failed": "Couldn't connect",
+    "tapToRetry": "Tap to try again",
     "reconnect": "Reconnect",
     "reconnectMsg": "Reconnecting to apply changes…"
   },
@@ -863,7 +879,9 @@
     "singbox": {
       "serviceNotRunning": "Service is not running",
       "missingPrivilege": "Missing privilege",
-      "missingPrivilegeMsg": "VPN mode requires administrator privileges. Either relaunch the app as administrator or change service mode.",
+      "missingPrivilegeMsg": "VPN mode can’t start. Relaunch the app as administrator or change service mode.",
+      "tunAddressInUse": "Another VPN is active",
+      "tunAddressInUseMsg": "VPN mode can’t start. Turn off the other VPN or change service mode.",
       "invalidConfigOptions": "Invalid configuration options",
       "invalidConfig": "Invalid configuration"
     },

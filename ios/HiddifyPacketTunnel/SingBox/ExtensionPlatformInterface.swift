@@ -23,7 +23,6 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     }
 
     public func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws {
-        NSLog("H?A1")
         try runBlocking { [self] in
             try await openTun0(options, ret0_)
         }
@@ -37,18 +36,20 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
             throw NSError(domain: "ExtensionPlatformInterface", code: 0, userInfo: [NSLocalizedDescriptionKey: String(localized: "Nil return pointer")])
         }
 
-//        let prefs = tunnel.overridePreferences ?? ExtensionProvider.OverridePreferences()
-        let autoRouteUseSubRangesByDefault = true//prefs.autoRouteUseSubRangesByDefault // await SharedPreferences.autoRouteUseSubRangesByDefault.get()
-        let excludeAPNs = false//prefs.excludeAPNsRoute //await SharedPreferences.excludeAPNsRoute.get()
-        let excludeDefaultRoute = false// prefs.excludeDefaultRoute
-        let systemProxyEnabled = false//prefs.systemProxyEnabled
+        let prefs = tunnel.overridePreferences ?? ExtensionProvider.OverridePreferences()
+        let autoRouteUseSubRangesByDefault = prefs.autoRouteUseSubRangesByDefault
+        let excludeAPNs = prefs.excludeAPNsRoute
+        let excludeDefaultRoute = prefs.excludeDefaultRoute
+        let systemProxyEnabled = prefs.systemProxyEnabled
 
         
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "::1")
         if options.getAutoRoute() {
             settings.mtu = NSNumber(value: options.getMTU())
 
-            if options.getDNSMode()?.value != LibboxDNSModeDisabled {
+            let dnsEnabled = options.getDNSMode()?.value != LibboxDNSModeDisabled
+            var dnsServers: [String] = []
+            if dnsEnabled {
                 let dnsServerIterator: LibboxStringIteratorProtocol
                 do {
                     // The Swift importer throws for a nil Objective-C result.
@@ -59,17 +60,12 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
                         NSUnderlyingErrorKey: error,
                     ])
                 }
-                var dnsServers: [String] = []
                 while dnsServerIterator.hasNext() {
                     dnsServers.append(dnsServerIterator.next())
                 }
                 guard !dnsServers.isEmpty, !dnsServers.contains(where: { $0.isEmpty }) else {
                     throw platformError(EINVAL, "DNS is enabled, but no valid DNS server addresses were returned")
                 }
-                let dnsSettings = NEDNSSettings(servers: dnsServers)
-                dnsSettings.matchDomains = [""]
-                dnsSettings.matchDomainsNoSearch = true
-                settings.dnsSettings = dnsSettings
             }
             
             var ipv4Address: [String] = []
@@ -174,6 +170,23 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
             ipv6Settings.includedRoutes = ipv6Routes
             ipv6Settings.excludedRoutes = ipv6ExcludeRoutes
             settings.ipv6Settings = ipv6Settings
+
+            // Hiddify's IPv6 fix: with an IPv6 TUN address, also offer an IPv6 DNS server (the TUN
+            // address; DNS to it is hijacked) when the core gave none, for IPv6-only networks
+            if dnsEnabled, let tunIPv6 = ipv6Address.first, !dnsServers.contains(where: { $0.contains(":") }) {
+                dnsServers.append(tunIPv6)
+            }
+            let dnsSettings: NEDNSSettings? = dnsServers.isEmpty ? nil : NEDNSSettings(servers: dnsServers)
+
+            // without a default route, the TUN's DNS must still answer every domain
+            let hasDefaultRoute = ipv4Routes.contains(where: {
+                $0.destinationAddress == "0.0.0.0" && $0.destinationSubnetMask == "0.0.0.0"
+            })
+            if !hasDefaultRoute {
+                dnsSettings?.matchDomains = [""]
+                dnsSettings?.matchDomainsNoSearch = true
+            }
+            settings.dnsSettings = dnsSettings
         }
 
         if options.isHTTPProxyEnabled() {
@@ -277,6 +290,8 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     private var defaultInterfaceMonitor: DefaultInterfaceMonitorState?
     private var ownedInterfaceNames: Set<String> = []
 
+    // the core needs the current physical interface (Wi-Fi/cellular) to bind its connections to,
+    // as sing-box-for-apple; it waits for the first update
     public func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {
         guard let listener else {
             throw platformError(EINVAL, "Missing default interface listener")
@@ -328,8 +343,14 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
             return
         }
         let ownedNames = ownedInterfaceNames
+        let networkPath = describeNetworkPath(path)
+        let networkPathChanged = state.lastNetworkPath != networkPath
+        state.lastNetworkPath = networkPath
         interfaceMonitorLock.unlock()
 
+        if networkPathChanged {
+            state.listener.updateNetworkPath(networkPath)
+        }
         if path.status != .unsatisfied,
            let defaultInterface = path.availableInterfaces.first(where: { !ownedNames.contains($0.name) }) {
             state.listener.updateDefaultInterface(defaultInterface.name, interfaceIndex: Int32(defaultInterface.index), isExpensive: path.isExpensive, isConstrained: path.isConstrained)
@@ -365,6 +386,42 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
                 self?.onUpdateDefaultInterface(state)
             }
         }
+    }
+
+    private func describeNetworkPath(_ path: Network.NWPath) -> String {
+        var components: [String] = []
+        switch path.status {
+        case .satisfied:
+            components.append("satisfied")
+        case .unsatisfied:
+            components.append("unsatisfied(\(path.unsatisfiedReason))")
+        case .requiresConnection:
+            components.append("requiresConnection")
+        @unknown default:
+            components.append("unknown")
+        }
+        if !path.availableInterfaces.isEmpty {
+            components.append("interfaces=" + path.availableInterfaces.map { "\($0.name)#\($0.index)/\($0.type)" }.joined(separator: ","))
+        }
+        if !path.gateways.isEmpty {
+            components.append("gateways=" + path.gateways.map { "\($0)" }.sorted().joined(separator: ","))
+        }
+        if path.supportsIPv4 {
+            components.append("ipv4")
+        }
+        if path.supportsIPv6 {
+            components.append("ipv6")
+        }
+        if path.supportsDNS {
+            components.append("dns")
+        }
+        if path.isExpensive {
+            components.append("expensive")
+        }
+        if path.isConstrained {
+            components.append("constrained")
+        }
+        return components.joined(separator: " ")
     }
 
     public func closeDefaultInterfaceMonitor(_: LibboxInterfaceUpdateListenerProtocol?) throws {
@@ -498,8 +555,7 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
         #if os(tvOS)
             return false
         #else
-            return false
-//            return tunnel.overridePreferences?.includeAllNetworks ?? false
+            return tunnel.overridePreferences?.includeAllNetworks ?? false
         #endif
     }
 
@@ -614,7 +670,7 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
         guard let message else {
             return
         }
-//        tunnel.writeMessage(message)
+        NSLog("%@", message)
     }
 
     func reset() {
@@ -710,7 +766,7 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     }
 
     public func tailscaleHostname() -> String {
-        ""
+        ProcessInfo.processInfo.hostName
     }
 
     public func usePlatformBridge() -> Bool {
@@ -748,6 +804,7 @@ private final class DefaultInterfaceMonitorState {
     let listener: LibboxInterfaceUpdateListenerProtocol
     let initialUpdate = DispatchSemaphore(value: 0)
     var path: Network.NWPath?
+    var lastNetworkPath: String?
     var initialized = false
 
     init(_ listener: LibboxInterfaceUpdateListenerProtocol) {

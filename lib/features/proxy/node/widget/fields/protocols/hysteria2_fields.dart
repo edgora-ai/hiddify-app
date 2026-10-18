@@ -1,0 +1,90 @@
+import 'package:flutter/material.dart';
+import 'package:hiddify/core/localization/translations.dart';
+import 'package:hiddify/features/proxy/node/data/node_json_adapter.dart';
+import 'package:hiddify/features/proxy/node/model/node_editor_state.dart';
+import 'package:hiddify/features/proxy/node/notifier/node_editor_notifier.dart';
+import 'package:hiddify/features/proxy/node/widget/fields/node_form_widgets.dart';
+import 'package:hiddify/singbox/model/singbox_outbound_schema_values.dart';
+import 'package:hiddify/utils/custom_text_form_field.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+
+class Hysteria2Fields extends HookConsumerWidget {
+  const Hysteria2Fields({super.key, required this.profileId, required this.rawTag, required this.data});
+
+  final String profileId;
+  final String? rawTag;
+  final NodeEditorState data;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = ref.watch(translationsProvider).requireValue;
+    final notifier = ref.read(nodeEditorNotifierProvider(profileId, rawTag).notifier);
+    final draft = data.draft;
+    final errors = data.fieldErrors;
+    final obfsType = NodeJson.asString(NodeJson.getPath(draft, ['obfs', 'type'])) ?? '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        NodeSectionHeader(t.pages.nodeEditor.sections.credentials),
+        NodeFieldPadding(
+          child: NodePasswordField(
+            label: t.pages.nodeEditor.fields.password,
+            initialValue: NodeJson.asString(draft['password']) ?? '',
+            validator: (_) => errors['password'],
+            onChanged: (v) => notifier.setPath(['password'], v),
+          ),
+        ),
+        NodeFieldRow(
+          children: [
+            NodeDropdownField<String>(
+              label: t.pages.nodeEditor.fields.obfs,
+              value: nodeHysteria2ObfsTypes.contains(obfsType) ? obfsType : '',
+              items: [
+                for (final o in nodeHysteria2ObfsTypes) DropdownMenuItem(value: o, child: Text(o.isEmpty ? '-' : o)),
+              ],
+              onChanged: (v) {
+                if (v == null || v.isEmpty) {
+                  notifier.setPath(['obfs'], null);
+                } else {
+                  notifier.setPath(['obfs', 'type'], v);
+                }
+              },
+            ),
+            NodePasswordField(
+              label: t.pages.nodeEditor.fields.obfsPassword,
+              initialValue: NodeJson.asString(NodeJson.getPath(draft, ['obfs', 'password'])) ?? '',
+              onChanged: (v) => notifier.setPath(['obfs', 'password'], v.isEmpty ? null : v),
+            ),
+          ],
+        ),
+        NodeFieldRow(
+          children: [
+            CustomTextFormField(
+              label: t.pages.nodeEditor.fields.uploadMbps,
+              initialValue: NodeJson.asString(draft['up_mbps']) ?? '',
+              maxLines: 1,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              validator: (_) => errors['up_mbps'],
+              onChanged: (v) {
+                final n = double.tryParse(v.trim());
+                notifier.setPath(['up_mbps'], (v.trim().isEmpty || n == null) ? null : n);
+              },
+            ),
+            CustomTextFormField(
+              label: t.pages.nodeEditor.fields.downloadMbps,
+              initialValue: NodeJson.asString(draft['down_mbps']) ?? '',
+              maxLines: 1,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              validator: (_) => errors['down_mbps'],
+              onChanged: (v) {
+                final n = double.tryParse(v.trim());
+                notifier.setPath(['down_mbps'], (v.trim().isEmpty || n == null) ? null : n);
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}

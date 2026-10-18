@@ -36,6 +36,7 @@
 				<string>clash</string>
 				<string>clashmeta</string>
 				<string>sing-box</string>
+				<string>tigerhiddify</string>
 			</array>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>

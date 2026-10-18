@@ -469,6 +469,47 @@ macos-release:
 ios-release: #not tested
 	fastforge package --platform ios --targets ipa --build-export-options-plist  ios/exportOptions.plist $(DISTRIBUTOR_ARGS)
 
+# Run only from a separately prepared, private source directory. Prepare Flutter,
+# Pods, generated sources and the provenance-checked Core separately; no prepare
+# or library-download target is a dependency here. All writable tool paths and
+# the local export plist must be supplied explicitly (absolute paths).
+# Generate the plist separately with tool/ios/local_export_options.py --help.
+IOS_LOCAL_TARGET ?= lib/main.dart
+export IOS_LOCAL_FLUTTER IOS_LOCAL_HOME IOS_LOCAL_PUB_CACHE IOS_LOCAL_TMPDIR
+export IOS_LOCAL_EXPORT_OPTIONS IOS_LOCAL_BUILD_NUMBER IOS_LOCAL_TARGET
+
+.PHONY: ios-local
+ios-local:
+	@set -eu; \
+	: "$${IOS_LOCAL_FLUTTER:?Set IOS_LOCAL_FLUTTER to the prepared private Flutter executable}"; \
+	: "$${IOS_LOCAL_HOME:?Set IOS_LOCAL_HOME to the prepared private HOME}"; \
+	: "$${IOS_LOCAL_PUB_CACHE:?Set IOS_LOCAL_PUB_CACHE to the prepared private pub cache}"; \
+	: "$${IOS_LOCAL_TMPDIR:?Set IOS_LOCAL_TMPDIR to a private temporary directory}"; \
+	: "$${IOS_LOCAL_EXPORT_OPTIONS:?Set IOS_LOCAL_EXPORT_OPTIONS to a generated local export plist}"; \
+	: "$${IOS_LOCAL_BUILD_NUMBER:?Set IOS_LOCAL_BUILD_NUMBER explicitly}"; \
+	for path in "$$IOS_LOCAL_FLUTTER" "$$IOS_LOCAL_HOME" "$$IOS_LOCAL_PUB_CACHE" "$$IOS_LOCAL_TMPDIR" "$$IOS_LOCAL_EXPORT_OPTIONS"; do \
+		case "$$path" in /*) ;; *) printf '%s\n' 'ios-local requires absolute private paths' >&2; exit 2 ;; esac; \
+	done; \
+	case "$$IOS_LOCAL_BUILD_NUMBER" in ''|*[!0-9]*|0*) printf '%s\n' 'IOS_LOCAL_BUILD_NUMBER must be a positive decimal integer without leading zeros' >&2; exit 2 ;; esac; \
+	for path in "$$IOS_LOCAL_HOME" "$$IOS_LOCAL_PUB_CACHE" "$$IOS_LOCAL_TMPDIR"; do \
+		[ -d "$$path" ] && [ -w "$$path" ] || { printf 'Private directory is missing or not writable: %s\n' "$$path" >&2; exit 2; }; \
+	done; \
+	[ -f "$$IOS_LOCAL_FLUTTER" ] && [ -x "$$IOS_LOCAL_FLUTTER" ] || { printf '%s\n' 'Prepared Flutter executable is missing' >&2; exit 2; }; \
+	[ -f "$$IOS_LOCAL_TARGET" ] || { printf '%s\n' 'IOS_LOCAL_TARGET must name an existing Dart entrypoint' >&2; exit 2; }; \
+	[ -d ios/Frameworks/HiddifyCore.xcframework ] && [ -f ios/Frameworks/HiddifyCore.xcframework/Info.plist ] || { printf '%s\n' 'Prebuilt ios/Frameworks/HiddifyCore.xcframework is required; no fallback download or Core build' >&2; exit 2; }; \
+	[ -f .dart_tool/package_config.json ] && [ -f ios/Pods/Manifest.lock ] && cmp -s ios/Podfile.lock ios/Pods/Manifest.lock || { printf '%s\n' 'Prepare pub dependencies and matching Pods separately before ios-local' >&2; exit 2; }; \
+	python3 -B tool/ios/local_export_options.py --check "$$IOS_LOCAL_EXPORT_OPTIONS"; \
+	umask 077; \
+	version_config=$$(mktemp "$$IOS_LOCAL_TMPDIR/ios-local-version.XXXXXX"); \
+	trap 'rm -f "$$version_config"' 0; \
+	trap 'exit 1' HUP INT TERM; \
+	printf 'FLUTTER_BUILD_NUMBER = %s\nCURRENT_PROJECT_VERSION = %s\n' "$$IOS_LOCAL_BUILD_NUMBER" "$$IOS_LOCAL_BUILD_NUMBER" > "$$version_config"; \
+	env HOME="$$IOS_LOCAL_HOME" PUB_CACHE="$$IOS_LOCAL_PUB_CACHE" TMPDIR="$$IOS_LOCAL_TMPDIR" \
+		FLUTTER_SUPPRESS_ANALYTICS=true XCODE_XCCONFIG_FILE="$$version_config" \
+		"$$IOS_LOCAL_FLUTTER" build ipa --release --no-pub \
+		--target="$$IOS_LOCAL_TARGET" --dart-define=driver=false \
+		--build-number="$$IOS_LOCAL_BUILD_NUMBER" --export-options-plist="$$IOS_LOCAL_EXPORT_OPTIONS"
+
 android-libs:
 	$(MKDIR) $(ANDROID_OUT) || echo Folder already exists. Skipping...
 	curl -L $(CORE_URL)/$(CORE_NAME)-android.tar.gz | tar xz -C $(ANDROID_OUT)/

@@ -15,10 +15,16 @@ class CustomTextFormField extends HookConsumerWidget {
     this.suffixIcon,
     this.label,
     this.hint,
+    this.helperText,
     this.maxLines,
     this.isDense = false,
     this.autoValidate = false,
     this.autoCorrect = false,
+    this.obscureText = false,
+    this.keyboardType,
+    this.textCapitalization,
+    this.enableSuggestions,
+    this.enabled = true,
   });
 
   final ValueChanged<String>? onChanged;
@@ -29,10 +35,16 @@ class CustomTextFormField extends HookConsumerWidget {
   final Widget? suffixIcon;
   final String? label;
   final String? hint;
+  final String? helperText;
   final int? maxLines;
   final bool isDense;
   final bool autoValidate;
   final bool autoCorrect;
+  final bool obscureText;
+  final TextInputType? keyboardType;
+  final TextCapitalization? textCapitalization;
+  final bool? enableSuggestions;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -44,15 +56,20 @@ class CustomTextFormField extends HookConsumerWidget {
 
     return TextFormField(
       controller: textController,
-      textCapitalization: TextCapitalization.sentences,
+      textCapitalization: textCapitalization ?? TextCapitalization.sentences,
       maxLines: maxLines,
       onChanged: onChanged,
+      obscureText: obscureText,
+      keyboardType: keyboardType,
+      enableSuggestions: enableSuggestions ?? !obscureText,
+      enabled: enabled,
       textDirection: textController.textDirection,
       decoration: InputDecoration(
         isDense: true,
         label: label != null ? Text(label!) : null,
         hintText: hint,
         hintStyle: Theme.of(context).textTheme.bodySmall,
+        helperText: helperText,
         constraints: effectiveConstraints,
         suffixIcon: suffixIcon,
         border: effectiveBorder,

@@ -94,6 +94,10 @@ abstract class UserOverride with _$UserOverride {
     /// Unlike the `fragment` subscription header it carries no values, since
     /// the user's settings already hold them.
     bool? enableFragment,
+
+    /// Explicit per-profile opt-in for Fake DNS-off fallback proxy hostnames.
+    /// Never inferred from subscription headers; unset profiles stay unchanged.
+    @JsonKey(includeIfNull: false) bool? preserveDomainForFallbackProxy,
   }) = _UserOverride;
 
   factory UserOverride.fromJson(Map<String, Object?> json) => _$UserOverrideFromJson(json);

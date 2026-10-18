@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   build-release:
+    if: ${{ github.repository == 'hiddify/hiddify-app' }}
     uses: ./.github/workflows/build.yml
     secrets: inherit
     permissions: write-all

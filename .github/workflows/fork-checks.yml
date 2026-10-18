@@ -1,0 +1,30 @@
+name: Fork-safe checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - 'feat/**'
+      - 'feature/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-python:
+    name: Offline Python contracts (not an app build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Ping0 synthetic tests
+        run: python3 -B -m unittest discover -s tool/ping0 -p 'test_*.py' -v
+      - name: Local iOS export and fake-build tests
+        run: python3 -B -m unittest discover -s tool/ios -p 'test_*.py' -v

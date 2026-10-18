@@ -554,6 +554,12 @@ class ProfileParser {
       (key, value) => !allowedOverrideConfigs.contains(key) || value == null || value.toString().isEmpty,
     );
 
+    // This compatibility mode is a user choice, never a subscription input.
+    // Add it only after filtering headers, including previously stored headers.
+    if (userOverride?.preserveDomainForFallbackProxy case final preserveDomain?) {
+      headers['preserve-domain-for-fallback-proxy'] = preserveDomain;
+    }
+
     final profileOverrideStr = jsonEncode({for (final key in headers.keys) key: headers[key]});
     return profileOverrideStr;
   }

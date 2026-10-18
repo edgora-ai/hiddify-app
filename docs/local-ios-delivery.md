@@ -83,6 +83,10 @@ The deferred Form update and text-direction fixes, including the corrected effec
 
 The offline Python contracts were also run against `2f6893d0`: 144 Ping0-tool tests, 40 iOS-entry tests, and 10 Core-entry tests, each with exit 0. These synthetic, standard-library results do not launch the App, compile an iOS package, exercise signing, or establish device or network acceptance. The local SDK and package-preparation blockers above remain unchanged.
 
+A subsequent checked-write repair, `3c3e5593`, explicitly dispatches through the writer interface. Independent source review closed both recursive forwarding branches. In [run 39162064839](https://github.com/edgora-ai/hiddify-app/actions/runs/39162064839), the repository suite completed 21 cases and the earlier stack overflow did not recur in the observed run. This is still not a complete App pass: four late-revision Form cases failed, and two widget/storage cases remained unfinished at the unchanged command deadline, which returned exit 124. There were 347 visible successes and 16 hidden loading successes, no skips, and no global completion event. The retry and SingleCall files had not started; targeted analysis did not run.
+
+The Form callback window and the two widget tests' real file/database waits are under separate investigation. The real Dart-to-Go bridge and its 12 Go cases completed again, but neither that result nor the repository subset replaces the missing complete run. Keep the PR unmerged, retain each failed run, and fix the concrete cause rather than skipping cases or extending deadlines.
+
 ## Local package path
 
 The legacy `ios-libs` target downloads a published Core and can overwrite the local framework. It is not used for this source delivery. The legacy Core preparation also performs unrelated dependency updates and tool installation; the separate `ios-local` entry avoids that path.

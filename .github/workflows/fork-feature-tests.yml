@@ -37,7 +37,7 @@ jobs:
       PUB_HOSTED_URL: https://pub.dev
       # Source/import/init-reviewed objects, not evidence of tests passing.
       # Update these together after independently reviewing any child merge pins.
-      CORE_SHA: 9178562f45a9fa6829651219ac52875da24e81a4
+      CORE_SHA: 97b092995bfc9347e0987b10f6f9b77c4d08e970
       SING_BOX_SHA: 4a9b51ae38646f5162927d45603e9a2b39e83258
       RAY2SING_SHA: 0da2eb56c77690dc6acddba9322687fba42a6183
       WIREGUARD_SHA: 2565b3a82dee8b32fdea66c5ca050bd2ef363d09

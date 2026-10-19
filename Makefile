@@ -518,12 +518,24 @@ ios-local:
 	done; \
 	umask 077; \
 	mkdir .ios-local-attempt || { printf '%s\n' 'ios-local workspace is already claimed or unavailable; preserve it and use a new workspace' >&2; exit 2; }; \
+	xcode_root="$$IOS_LOCAL_TMPDIR/ios-local-xcode"; \
+	mkdir "$$xcode_root" || { printf '%s\n' 'Xcode root already exists or cannot be created; preserve it and use a new workspace' >&2; exit 2; }; \
 	version_config=$$(mktemp "$$IOS_LOCAL_TMPDIR/ios-local-version.XXXXXX"); \
 	trap 'rm -f "$$version_config"' 0; \
 	trap 'exit 1' HUP INT TERM; \
 	printf 'FLUTTER_BUILD_NUMBER = %s\nCURRENT_PROJECT_VERSION = %s\n' "$$IOS_LOCAL_BUILD_NUMBER" "$$IOS_LOCAL_BUILD_NUMBER" > "$$version_config"; \
+	printf '%s\n' \
+		'OBJROOT = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/Intermediates.noindex' \
+		'SYMROOT = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/Products' \
+		'CACHE_ROOT = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/Caches' \
+		'MODULE_CACHE_DIR = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/ModuleCache.noindex' \
+		'CLANG_MODULE_CACHE_PATH = $$(MODULE_CACHE_DIR)' \
+		'SWIFT_MODULE_CACHE_PATH = $$(MODULE_CACHE_DIR)' \
+		'SDK_STAT_CACHE_DIR = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)' \
+		'SHARED_PRECOMPS_DIR = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/SharedPrecompiledHeaders' \
+		'DSTROOT = $$(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/InstallationBuildProducts' >> "$$version_config"; \
 	env HOME="$$IOS_LOCAL_HOME" PUB_CACHE="$$IOS_LOCAL_PUB_CACHE" TMPDIR="$$IOS_LOCAL_TMPDIR" \
-		XDG_CONFIG_HOME="$$IOS_LOCAL_HOME/.config/flutter" \
+		XDG_CONFIG_HOME="$$IOS_LOCAL_HOME/.config/flutter" HIDDIFY_IOS_LOCAL_XCODE_ROOT="$$xcode_root" \
 		FLUTTER_SUPPRESS_ANALYTICS=true XCODE_XCCONFIG_FILE="$$version_config" \
 		"$$IOS_LOCAL_FLUTTER" build ipa --release --no-pub \
 		--target="$$IOS_LOCAL_TARGET" --dart-define=driver=false \

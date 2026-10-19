@@ -17,6 +17,22 @@ import local_export_options as export
 
 REPO = Path(__file__).parents[2]
 TEAM = "AB12CD34EF"
+XCODE_ROOT_CONFIG = (
+    "OBJROOT = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/Intermediates.noindex\n"
+    "SYMROOT = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/Products\n"
+    "CACHE_ROOT = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/Caches\n"
+    "MODULE_CACHE_DIR = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/ModuleCache.noindex\n"
+    "CLANG_MODULE_CACHE_PATH = $(MODULE_CACHE_DIR)\n"
+    "SWIFT_MODULE_CACHE_PATH = $(MODULE_CACHE_DIR)\n"
+    "SDK_STAT_CACHE_DIR = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)\n"
+    "SHARED_PRECOMPS_DIR = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/SharedPrecompiledHeaders\n"
+    "DSTROOT = $(HIDDIFY_IOS_LOCAL_XCODE_ROOT)/InstallationBuildProducts\n"
+)
+
+
+def expected_config(build_number):
+    return (f"FLUTTER_BUILD_NUMBER = {build_number}\nCURRENT_PROJECT_VERSION = {build_number}\n"
+            + XCODE_ROOT_CONFIG)
 
 
 class LocalBuildTests(unittest.TestCase):
@@ -41,6 +57,8 @@ class LocalBuildTests(unittest.TestCase):
         self.log = self.root / "fake-flutter.jsonl"
         self.unexpected = self.root / "unexpected-command.txt"
         self.attempt = self.root / ".ios-local-attempt"
+        self.xcode_root = self.root / "tmp/ios-local-xcode"
+        self.xcode_cache = self.xcode_root / "synthetic-cache.txt"
         self.entered = self.root / "fake-entered"
         self.archive = self.root / "build/ios/archive/Runner.xcarchive/synthetic.txt"
         self.ipa = self.root / "build/ios/ipa/synthetic.ipa"
@@ -50,9 +68,12 @@ class LocalBuildTests(unittest.TestCase):
             "import json, os, pathlib, sys, time\n"
             "config = pathlib.Path(os.environ['XCODE_XCCONFIG_FILE'])\n"
             "attempt = pathlib.Path('.ios-local-attempt')\n"
+            "xcode_root = pathlib.Path(os.environ['HIDDIFY_IOS_LOCAL_XCODE_ROOT'])\n"
+            "(xcode_root / 'synthetic-cache.txt').write_text('Synthetic retained cache, not an Xcode product.\\n')\n"
             "row = {'argv': sys.argv[1:], 'config_path': str(config), 'config': config.read_text(), "
             "'config_mode': config.stat().st_mode & 0o777, 'attempt_mode': attempt.stat().st_mode & 0o777, "
-            "'env': {k: os.environ[k] for k in ('HOME', 'PUB_CACHE', 'TMPDIR', 'XDG_CONFIG_HOME', 'FLUTTER_SUPPRESS_ANALYTICS')}}\n"
+            "'xcode_root_mode': xcode_root.stat().st_mode & 0o777, "
+            "'env': {k: os.environ[k] for k in ('HOME', 'PUB_CACHE', 'TMPDIR', 'XDG_CONFIG_HOME', 'FLUTTER_SUPPRESS_ANALYTICS', 'HIDDIFY_IOS_LOCAL_XCODE_ROOT')}}\n"
             "with open(os.environ['FAKE_LOG'], 'a') as stream: stream.write(json.dumps(row) + '\\n')\n"
             "release = os.environ.get('FAKE_RELEASE')\n"
             "deadline = time.monotonic() + 10\n"
@@ -104,25 +125,29 @@ class LocalBuildTests(unittest.TestCase):
             env=environment, capture_output=True, text=True, timeout=20, check=False,
         )
 
-    def assert_blocked(self, result, *, attempt_exists=False):
+    def assert_blocked(self, result, *, attempt_exists=False, tmp_entries=()):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.log.exists(), result.stdout + result.stderr)
         self.assertFalse(self.unexpected.exists())
         self.assertEqual(self.core.read_bytes(), self.core_bytes)
-        self.assertEqual(list((self.root / "tmp").iterdir()), [])
+        self.assertEqual(list((self.root / "tmp").iterdir()), list(tmp_entries))
         self.assertEqual(os.path.lexists(self.attempt), attempt_exists)
 
     def assert_retry_preserves_attempt(self):
         log = self.log.read_bytes()
         outputs = {path: path.read_bytes() for path in (self.archive, self.ipa) if path.exists()}
         attempt_inode = self.attempt.stat().st_ino
+        xcode_inode = self.xcode_root.stat().st_ino
+        cache = self.xcode_cache.read_bytes()
         result = self.run_make({"IOS_LOCAL_BUILD_NUMBER": "60002"})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.log.read_bytes(), log)
         self.assertEqual({path: path.read_bytes() for path in (self.archive, self.ipa) if path.exists()}, outputs)
         self.assertEqual(self.attempt.stat().st_ino, attempt_inode)
+        self.assertEqual(self.xcode_root.stat().st_ino, xcode_inode)
+        self.assertEqual(self.xcode_cache.read_bytes(), cache)
         self.assertFalse(self.unexpected.exists())
-        self.assertEqual(list((self.root / "tmp").iterdir()), [])
+        self.assertEqual(list((self.root / "tmp").iterdir()), [self.xcode_root])
 
     def write_flutter_config(self, value, *, legacy=False):
         path = self.root / "home" / (".flutter_settings" if legacy else ".config/flutter/settings")
@@ -144,12 +169,13 @@ class LocalBuildTests(unittest.TestCase):
             "HOME": self.values["IOS_LOCAL_HOME"], "PUB_CACHE": self.values["IOS_LOCAL_PUB_CACHE"],
             "TMPDIR": self.values["IOS_LOCAL_TMPDIR"], "FLUTTER_SUPPRESS_ANALYTICS": "true",
             "XDG_CONFIG_HOME": str(self.root / "home/.config/flutter"),
+            "HIDDIFY_IOS_LOCAL_XCODE_ROOT": str(self.xcode_root),
         })
         self.assertTrue(self.attempt.is_dir())
         self.assertEqual(call["attempt_mode"], 0o700)
         self.assertTrue(self.archive.is_file())
         self.assertTrue(self.ipa.is_file())
-        self.assertEqual(call["config"], "FLUTTER_BUILD_NUMBER = 60001\nCURRENT_PROJECT_VERSION = 60001\n")
+        self.assertEqual(call["config"], expected_config("60001"))
         self.assertEqual(call["config_mode"], 0o600)
         self.assertEqual(Path(call["config_path"]).parent, self.root / "tmp")
         self.assertFalse(Path(call["config_path"]).exists())
@@ -163,7 +189,105 @@ class LocalBuildTests(unittest.TestCase):
         call = json.loads(self.log.read_text())
         self.assertIn("--target=lib/custom entry.dart", call["argv"])
         self.assertIn("--build-number=60002", call["argv"])
-        self.assertEqual(call["config"], "FLUTTER_BUILD_NUMBER = 60002\nCURRENT_PROJECT_VERSION = 60002\n")
+        self.assertEqual(call["config"], expected_config("60002"))
+
+    def test_xcode_roots_use_a_private_retained_directory_not_an_inherited_root(self):
+        inherited = self.root / "inherited-xcode-root"
+        result = self.run_make({"HIDDIFY_IOS_LOCAL_XCODE_ROOT": str(inherited)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = json.loads(self.log.read_text())
+        self.assertEqual(call["env"]["HIDDIFY_IOS_LOCAL_XCODE_ROOT"], str(self.xcode_root))
+        self.assertEqual(call["config"], expected_config("60001"))
+        self.assertNotIn("BUILD_DIR =", call["config"])
+        self.assertNotIn("BUILD_ROOT =", call["config"])
+        self.assertEqual(self.xcode_root.parent, Path(self.values["IOS_LOCAL_TMPDIR"]))
+        self.assertEqual(call["xcode_root_mode"], 0o700)
+        self.assertEqual(self.xcode_root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.xcode_cache.read_text(), "Synthetic retained cache, not an Xcode product.\n")
+        self.assertEqual(list((self.root / "tmp").iterdir()), [self.xcode_root])
+        self.assertFalse(inherited.exists())
+        self.assertFalse(Path(call["config_path"]).exists())
+        self.assert_retry_preserves_attempt()
+
+    def assert_opaque_xcode_root_path(self, tmpdir):
+        Path(tmpdir).mkdir(parents=True)
+        result = self.run_make({"IOS_LOCAL_TMPDIR": tmpdir})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = json.loads(self.log.read_text())
+        xcode_root = tmpdir + "/ios-local-xcode"
+        self.assertEqual(call["env"]["TMPDIR"], tmpdir)
+        self.assertEqual(call["env"]["HIDDIFY_IOS_LOCAL_XCODE_ROOT"], xcode_root)
+        self.assertEqual(call["config"], expected_config("60001"))
+        self.assertNotIn(tmpdir, call["config"])
+        self.assertEqual(call["xcode_root_mode"], 0o700)
+        self.assertEqual(Path(call["config_path"]).parent, Path(tmpdir))
+        self.assertFalse(Path(call["config_path"]).exists())
+        self.assertEqual(list(Path(tmpdir).iterdir()), [Path(xcode_root)])
+        self.assertEqual((Path(xcode_root) / "synthetic-cache.txt").read_text(),
+                         "Synthetic retained cache, not an Xcode product.\n")
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.assertTrue(self.attempt.is_dir())
+        self.assertEqual(self.core.read_bytes(), self.core_bytes)
+        self.assertFalse(self.unexpected.exists())
+
+    def test_xcode_root_path_with_spaces_and_shell_symbols_stays_in_environment(self):
+        tmpdir = str(self.root / "tmp spaces #; ' \" $(touch xcode-command-ran) `touch xcode-backtick-ran`") + "//private"
+        self.assert_opaque_xcode_root_path(tmpdir)
+        self.assertFalse((self.root / "xcode-command-ran").exists())
+        self.assertFalse((self.root / "xcode-backtick-ran").exists())
+
+    def test_xcode_root_path_cannot_inject_xcconfig_lines_or_comments(self):
+        tmpdir = str(self.root / "tmp\nBUILD_DIR = injected\n") + "//private"
+        self.assert_opaque_xcode_root_path(tmpdir)
+
+    def assert_existing_xcode_root_preserved(self, kind):
+        target = self.root / "retained-xcode-target"
+        target.mkdir()
+        retained = target / "retained.txt"
+        retained.write_bytes(b"retained Xcode target")
+        if kind == "directory":
+            self.xcode_root.mkdir(mode=0o755)
+            (self.xcode_root / "retained.txt").write_bytes(b"retained Xcode root")
+        elif kind == "file":
+            self.xcode_root.write_bytes(b"retained Xcode root")
+        else:
+            self.xcode_root.symlink_to(target if kind == "link" else self.root / "absent-xcode-target")
+        original = self.xcode_root.lstat()
+        result = self.run_make()
+        self.assert_blocked(result, attempt_exists=True, tmp_entries=(self.xcode_root,))
+        self.assertIn("Xcode root already exists or cannot be created", result.stderr)
+        attempt_inode = self.attempt.stat().st_ino
+        self.assertEqual(self.attempt.stat().st_mode & 0o777, 0o700)
+        retry = self.run_make({"IOS_LOCAL_BUILD_NUMBER": "60002"})
+        self.assert_blocked(retry, attempt_exists=True, tmp_entries=(self.xcode_root,))
+        self.assertIn("workspace is already claimed or unavailable", retry.stderr)
+        self.assertEqual(self.attempt.stat().st_ino, attempt_inode)
+        self.assertEqual(self.xcode_root.lstat().st_ino, original.st_ino)
+        self.assertEqual(self.xcode_root.lstat().st_mode, original.st_mode)
+        self.assertFalse((self.root / "build").exists())
+        if kind == "directory":
+            self.assertEqual(list(self.xcode_root.iterdir()), [self.xcode_root / "retained.txt"])
+            self.assertEqual((self.xcode_root / "retained.txt").read_bytes(), b"retained Xcode root")
+        elif kind == "file":
+            self.assertEqual(self.xcode_root.read_bytes(), b"retained Xcode root")
+        else:
+            expected = target if kind == "link" else self.root / "absent-xcode-target"
+            self.assertEqual(os.readlink(self.xcode_root), str(expected))
+            self.assertFalse((self.root / "absent-xcode-target").exists())
+        self.assertEqual(retained.read_bytes(), b"retained Xcode target")
+        self.assertEqual(list(target.iterdir()), [retained])
+
+    def test_existing_xcode_root_directory_is_not_reused_or_removed(self):
+        self.assert_existing_xcode_root_preserved("directory")
+
+    def test_existing_xcode_root_file_is_not_replaced(self):
+        self.assert_existing_xcode_root_preserved("file")
+
+    def test_existing_xcode_root_symlink_is_not_followed_or_replaced(self):
+        self.assert_existing_xcode_root_preserved("link")
+
+    def test_existing_xcode_root_dangling_symlink_is_not_replaced(self):
+        self.assert_existing_xcode_root_preserved("dangling-link")
 
     def test_all_private_inputs_and_build_number_are_mandatory(self):
         for key in self.values:

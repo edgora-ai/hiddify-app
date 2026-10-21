@@ -11,7 +11,9 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
+import local_build_environment as build_environment
 import local_export_options as export
 
 
@@ -39,9 +41,9 @@ class LocalBuildTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ios-local-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / "private source"
+        self.root = Path(self.temp.name).resolve() / "private source"
         self.root.mkdir()
-        for directory in ("home", "pub cache", "tmp", "bin", "lib", ".dart_tool", "ios/Pods", "tool/ios", "ios/Frameworks/HiddifyCore.xcframework"):
+        for directory in ("home", "identity home", "pub cache", "tmp", "bin", "lib", ".dart_tool", "ios/Pods", "tool/ios", "ios/Frameworks/HiddifyCore.xcframework"):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         (self.root / "dependencies.properties").write_text("core.version=synthetic\n")
         (self.root / "lib/main.dart").write_text("// Synthetic entrypoint, never compiled.\n")
@@ -51,7 +53,22 @@ class LocalBuildTests(unittest.TestCase):
         self.core = self.root / "ios/Frameworks/HiddifyCore.xcframework/Info.plist"
         self.core.write_bytes(plistlib.dumps({"Synthetic": True}))
         self.core_bytes = self.core.read_bytes()
-        shutil.copyfile(REPO / "tool/ios/local_export_options.py", self.root / "tool/ios/local_export_options.py")
+        for name in ("local_export_options.py", "local_build_environment.py"):
+            shutil.copyfile(REPO / "tool/ios" / name, self.root / "tool/ios" / name)
+        # Only the synthetic helper process sees this mocked account home. No
+        # test reads the real user's Flutter settings or signing material.
+        python = self.root / "bin/python3"
+        python.write_text(
+            "#!" + sys.executable + "\n"
+            "import os, pwd, runpy, sys, types\n"
+            "sys.dont_write_bytecode = True\n"
+            "args = sys.argv[1:]\n"
+            "if args == ['-B', 'tool/ios/local_build_environment.py']:\n"
+            "    pwd.getpwuid = lambda uid: types.SimpleNamespace(pw_dir=os.environ['FAKE_ACCOUNT_HOME'])\n"
+            "    runpy.run_path(args[1], run_name='__main__')\n"
+            "else: os.execv(sys.executable, [sys.executable, *args])\n"
+        )
+        python.chmod(0o700)
         self.options = self.root / "local export.plist"
         export.write_options(str(self.options), TEAM)
         self.log = self.root / "fake-flutter.jsonl"
@@ -93,7 +110,7 @@ class LocalBuildTests(unittest.TestCase):
             "raise SystemExit(int(os.environ.get('FAKE_FLUTTER_EXIT', '0')))\n"
         )
         self.flutter.chmod(0o700)
-        for name in ("flutter", "dart", "pod", "xcodebuild", "go", "curl", "wget", "fastforge"):
+        for name in ("flutter", "dart", "pod", "xcodebuild", "codesign", "security", "go", "curl", "wget", "fastforge"):
             guard = self.root / "bin" / name
             guard.write_text(
                 "#!" + sys.executable + "\n"
@@ -104,6 +121,7 @@ class LocalBuildTests(unittest.TestCase):
             guard.chmod(0o700)
         self.values = {
             "IOS_LOCAL_FLUTTER": str(self.flutter), "IOS_LOCAL_HOME": str(self.root / "home"),
+            "IOS_LOCAL_IDENTITY_HOME": str(self.root / "identity home"),
             "IOS_LOCAL_PUB_CACHE": str(self.root / "pub cache"), "IOS_LOCAL_TMPDIR": str(self.root / "tmp"),
             "IOS_LOCAL_EXPORT_OPTIONS": str(self.options), "IOS_LOCAL_BUILD_NUMBER": "60001",
         }
@@ -117,6 +135,7 @@ class LocalBuildTests(unittest.TestCase):
                 environment.pop(key, None)
             else:
                 environment[key] = value
+        environment.setdefault("FAKE_ACCOUNT_HOME", str(self.root / "identity home"))
         environment.update({"FAKE_LOG": str(self.log), "FAKE_ENTERED": str(self.entered),
                             "UNEXPECTED_COMMANDS": str(self.unexpected),
                             "PATH": str(self.root / "bin") + os.pathsep + os.environ.get("PATH", "")})
@@ -150,7 +169,8 @@ class LocalBuildTests(unittest.TestCase):
         self.assertEqual(list((self.root / "tmp").iterdir()), [self.xcode_root])
 
     def write_flutter_config(self, value, *, legacy=False):
-        path = self.root / "home" / (".flutter_settings" if legacy else ".config/flutter/settings")
+        path = (self.root / "identity home/.flutter_settings" if legacy
+                else self.root / "home/.config/flutter/settings")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
         return path
@@ -166,7 +186,7 @@ class LocalBuildTests(unittest.TestCase):
             "--build-number=60001", "--export-options-plist=" + str(self.options),
         ])
         self.assertEqual(call["env"], {
-            "HOME": self.values["IOS_LOCAL_HOME"], "PUB_CACHE": self.values["IOS_LOCAL_PUB_CACHE"],
+            "HOME": self.values["IOS_LOCAL_IDENTITY_HOME"], "PUB_CACHE": self.values["IOS_LOCAL_PUB_CACHE"],
             "TMPDIR": self.values["IOS_LOCAL_TMPDIR"], "FLUTTER_SUPPRESS_ANALYTICS": "true",
             "XDG_CONFIG_HOME": str(self.root / "home/.config/flutter"),
             "HIDDIFY_IOS_LOCAL_XCODE_ROOT": str(self.xcode_root),
@@ -495,7 +515,7 @@ class LocalBuildTests(unittest.TestCase):
                     raw = path.read_bytes()
                     result = self.run_make()
                     self.assert_blocked(result)
-                    self.assertIn("requires default Flutter build-dir", result.stderr)
+                    self.assertIn("Legacy Flutter settings" if legacy else "requires default Flutter build-dir", result.stderr)
                     self.assertEqual(path.read_bytes(), raw)
                     path.unlink()
 
@@ -512,7 +532,7 @@ class LocalBuildTests(unittest.TestCase):
     def test_configuration_links_are_rejected_without_following_fixture_targets(self):
         target = self.root / "retained-config-target"
         target.write_bytes(b"retained configuration")
-        for relative in ("home/.flutter_settings", "home/.config", "home/.config/flutter", "home/.config/flutter/settings"):
+        for relative in ("identity home/.flutter_settings", "home/.config", "home/.config/flutter", "home/.config/flutter/settings"):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             for dangling in (False, True):
@@ -521,7 +541,8 @@ class LocalBuildTests(unittest.TestCase):
                     path.symlink_to(destination)
                     result = self.run_make()
                     self.assert_blocked(result)
-                    self.assertIn("regular private configuration paths", result.stderr)
+                    self.assertIn("Legacy Flutter settings" if relative.startswith("identity home/")
+                                  else "regular private configuration paths", result.stderr)
                     self.assertEqual(os.readlink(path), str(destination))
                     path.unlink()
                     self.assertEqual(target.read_bytes(), b"retained configuration")
@@ -534,13 +555,220 @@ class LocalBuildTests(unittest.TestCase):
         self.assertTrue(self.archive.is_file())
         self.assertTrue(self.ipa.is_file())
 
-    def test_legacy_settings_take_precedence_over_private_xdg_settings(self):
+    def test_real_legacy_settings_override_private_xdg_and_are_preserved(self):
         self.write_flutter_config({"build-dir": "unused-alternate-build"})
-        self.write_flutter_config({"build-dir": "build"}, legacy=True)
+        path = self.write_flutter_config({"build-dir": "build"}, legacy=True)
+        before = path.read_bytes()
+        inode = path.stat().st_ino
+        result = self.run_make()
+        self.assert_blocked(result)
+        self.assertIn("Legacy Flutter settings override private XDG", result.stderr)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path.stat().st_ino, inode)
+        self.assertFalse((self.root / "unused-alternate-build").exists())
+
+    def test_real_legacy_directory_is_refused_without_modification(self):
+        legacy = self.root / "identity home/.flutter_settings"
+        legacy.mkdir()
+        retained = legacy / "retained.txt"
+        retained.write_text("Synthetic legacy entry, not user settings")
+        before = retained.read_bytes()
+        inode = legacy.stat().st_ino
+        result = self.run_make()
+        self.assert_blocked(result)
+        self.assertIn("Legacy Flutter settings", result.stderr)
+        self.assertEqual(legacy.stat().st_ino, inode)
+        self.assertEqual(retained.read_bytes(), before)
+
+    def test_identity_home_must_match_the_current_account_not_the_callers_HOME(self):
+        other = self.root / "another user home"
+        other.mkdir()
+        result = self.run_make({"HOME": str(other), "IOS_LOCAL_IDENTITY_HOME": str(other)})
+        self.assert_blocked(result)
+        self.assertIn("current user's account home", result.stderr)
+
+    def test_identity_and_private_flutter_homes_must_differ(self):
+        private = self.values["IOS_LOCAL_HOME"]
+        self.assert_blocked(self.run_make({"IOS_LOCAL_IDENTITY_HOME": private, "FAKE_ACCOUNT_HOME": private}))
+
+    def test_identity_home_link_is_not_followed(self):
+        linked = self.root / "linked identity"
+        linked.symlink_to(self.root / "identity home", target_is_directory=True)
+        result = self.run_make({"IOS_LOCAL_IDENTITY_HOME": str(linked), "FAKE_ACCOUNT_HOME": str(linked)})
+        self.assert_blocked(result)
+        self.assertEqual(os.readlink(linked), str(self.root / "identity home"))
+
+    def test_identity_home_cannot_be_the_pub_cache_before_the_marker(self):
+        identity = self.values["IOS_LOCAL_IDENTITY_HOME"]
+        result = self.run_make({"IOS_LOCAL_PUB_CACHE": identity + "/."})
+        self.assert_blocked(result)
+        self.assertEqual(list(Path(identity).iterdir()), [])
+
+    def test_identity_home_cannot_be_the_temporary_root_before_the_marker(self):
+        identity = self.values["IOS_LOCAL_IDENTITY_HOME"]
+        result = self.run_make({"IOS_LOCAL_TMPDIR": identity + "/."})
+        self.assert_blocked(result)
+        self.assertEqual(list(Path(identity).iterdir()), [])
+
+    def test_private_role_aliases_use_directory_identity_including_case_variants(self):
+        identity = self.values["IOS_LOCAL_IDENTITY_HOME"]
+        alias = identity.swapcase()
+        if not os.path.lexists(alias):
+            alias = identity + "/."
+        self.assertNotEqual(alias, identity)
+        self.assert_blocked(self.run_make({"IOS_LOCAL_PUB_CACHE": alias}))
+        self.assertEqual(list(Path(identity).iterdir()), [])
+
+    def test_linked_private_role_roots_are_not_followed(self):
+        identity = Path(self.values["IOS_LOCAL_IDENTITY_HOME"])
+        linked = self.root / "linked role"
+        linked.symlink_to(identity, target_is_directory=True)
+        for key in ("IOS_LOCAL_HOME", "IOS_LOCAL_PUB_CACHE", "IOS_LOCAL_TMPDIR"):
+            with self.subTest(role=key):
+                self.assert_blocked(self.run_make({key: str(linked)}))
+                self.assertEqual(os.readlink(linked), str(identity))
+                self.assertEqual(list(identity.iterdir()), [])
+
+    def test_preclaim_helper_requires_each_explicit_private_role(self):
+        identity = self.values["IOS_LOCAL_IDENTITY_HOME"]
+        roles = [self.values[key] for key in ("IOS_LOCAL_HOME", "IOS_LOCAL_PUB_CACHE", "IOS_LOCAL_TMPDIR")]
+        with mock.patch.object(build_environment.pwd, "getpwuid", return_value=mock.Mock(pw_dir=identity)):
+            for index in range(len(roles)):
+                with self.subTest(missing=index):
+                    missing = list(roles)
+                    missing[index] = None
+                    with self.assertRaises(ValueError):
+                        build_environment.check_environment(identity, *missing)
+
+    def test_identity_home_cannot_be_the_actual_private_xdg_root(self):
+        identity = self.root / "home/.config/flutter"
+        identity.mkdir(parents=True)
+        result = self.run_make({"IOS_LOCAL_IDENTITY_HOME": str(identity), "FAKE_ACCOUNT_HOME": str(identity)})
+        self.assert_blocked(result)
+        self.assertEqual(list(identity.iterdir()), [])
+
+    def test_identity_home_cannot_be_the_source_or_default_output_root(self):
+        for relative in (".", "build", "build/ios"):
+            with self.subTest(role=relative):
+                identity = self.root / relative
+                identity.mkdir(parents=True, exist_ok=True)
+                result = self.run_make({"IOS_LOCAL_IDENTITY_HOME": str(identity), "FAKE_ACCOUNT_HOME": str(identity)})
+                self.assert_blocked(result)
+                self.assertFalse((self.root / "build/ios/archive").exists())
+                self.assertFalse((self.root / "build/ios/ipa").exists())
+
+    def test_identity_home_cannot_be_an_existing_derived_xcode_root(self):
+        self.xcode_root.mkdir()
+        identity = str(self.xcode_root)
+        result = self.run_make({"IOS_LOCAL_IDENTITY_HOME": identity, "FAKE_ACCOUNT_HOME": identity})
+        self.assert_blocked(result, tmp_entries=(self.xcode_root,))
+        self.assertEqual(list(self.xcode_root.iterdir()), [])
+
+    def test_all_private_role_roots_are_required_for_preclaim_validation(self):
+        for key in ("IOS_LOCAL_HOME", "IOS_LOCAL_PUB_CACHE", "IOS_LOCAL_TMPDIR"):
+            with self.subTest(role=key):
+                self.assert_blocked(self.run_make({key: None}))
+
+    def test_json_exponent_overflow_is_rejected_even_outside_build_dir(self):
+        for raw in ('{"build-dir":"build","unused":1e999}',
+                    '{"build-dir":"build","unused":-1e999}',
+                    '{"build-dir":"build","nested":[{"unused":1e999}]}',
+                    '{"build-dir":"build","nested":[{"unused":-1e999}]}',
+                    '{"build-dir":"build","nested":[NaN]}',
+                    '{"build-dir":"build","nested":{"unused":Infinity}}',
+                    '{"build-dir":"build","nested":{"unused":-Infinity}}'):
+            with self.subTest(json=raw):
+                fixture = LocalBuildTests("test_release_driver_off_private_paths_and_shared_version_override")
+                fixture.setUp()
+                try:
+                    path = fixture.root / "home/.config/flutter/settings"
+                    path.parent.mkdir(parents=True)
+                    path.write_text(raw)
+                    fixture.assert_blocked(fixture.run_make())
+                    self.assertEqual(path.read_text(), raw)
+                finally:
+                    fixture.doCleanups()
+
+    def test_finite_scientific_numbers_remain_valid_in_nested_configuration(self):
+        path = self.root / "home/.config/flutter/settings"
+        path.parent.mkdir(parents=True)
+        raw = '{"build-dir":"build","nested":[1e3,-1e-2,{"finite":1.2e308}]}'
+        path.write_text(raw)
         result = self.run_make()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(self.archive.is_file())
-        self.assertFalse((self.root / "unused-alternate-build").exists())
+        self.assertEqual(path.read_text(), raw)
+
+    def test_identity_home_path_remains_opaque_to_the_shell(self):
+        identity = self.root / "identity ; $(touch identity-injected) `touch identity-backtick`"
+        identity.mkdir()
+        result = self.run_make({"IOS_LOCAL_IDENTITY_HOME": str(identity), "FAKE_ACCOUNT_HOME": str(identity)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(self.log.read_text())["env"]["HOME"], str(identity))
+        self.assertFalse((self.root / "identity-injected").exists())
+        self.assertFalse((self.root / "identity-backtick").exists())
+
+    def test_identity_home_control_characters_and_parent_traversal_are_rejected(self):
+        for suffix in ("identity\nHOME=injected", "identity\tname", "home/../identity home"):
+            with self.subTest(path=suffix):
+                identity = str(self.root / suffix)
+                self.assert_blocked(self.run_make({"IOS_LOCAL_IDENTITY_HOME": identity, "FAKE_ACCOUNT_HOME": identity}))
+
+    def test_inherited_private_HOME_is_replaced_only_for_the_signing_context(self):
+        result = self.run_make({"HOME": self.values["IOS_LOCAL_HOME"]})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = json.loads(self.log.read_text())
+        self.assertEqual(call["env"]["HOME"], self.values["IOS_LOCAL_IDENTITY_HOME"])
+        self.assertEqual(call["env"]["XDG_CONFIG_HOME"], str(self.root / "home/.config/flutter"))
+
+    def test_unused_private_legacy_settings_do_not_override_actual_xdg_settings(self):
+        legacy = self.root / "home/.flutter_settings"
+        legacy.write_text('{"build-dir": "unused-private-legacy"}')
+        before = legacy.read_bytes()
+        self.write_flutter_config({"build-dir": "build"})
+        result = self.run_make()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(legacy.read_bytes(), before)
+
+    def test_legacy_configuration_is_rejected_without_opening_or_parsing_it(self):
+        legacy = self.write_flutter_config({}, legacy=True)
+        legacy.write_text("{malformed real-user settings must remain untouched")
+        original_open = os.open
+        def guarded_open(path, *args, **kwargs):
+            if str(path) == ".flutter_settings":
+                self.fail("legacy settings must not be opened")
+            return original_open(path, *args, **kwargs)
+        with mock.patch.object(build_environment.pwd, "getpwuid", return_value=mock.Mock(pw_dir=str(legacy.parent))), \
+                mock.patch.object(build_environment.os, "open", side_effect=guarded_open), \
+                mock.patch.object(build_environment.json, "loads", side_effect=AssertionError("legacy must not be parsed")):
+            with self.assertRaisesRegex(ValueError, "Legacy Flutter settings"):
+                build_environment.check_environment(str(legacy.parent), self.values["IOS_LOCAL_HOME"],
+                                                    self.values["IOS_LOCAL_PUB_CACHE"], self.values["IOS_LOCAL_TMPDIR"])
+        self.assertEqual(legacy.read_text(), "{malformed real-user settings must remain untouched")
+
+    def test_identity_directory_owner_must_be_the_current_user(self):
+        identity = self.values["IOS_LOCAL_IDENTITY_HOME"]
+        uid = os.getuid()
+        with mock.patch.object(build_environment.pwd, "getpwuid", return_value=mock.Mock(pw_dir=identity)), \
+                mock.patch.object(build_environment.os, "getuid", return_value=uid + 1):
+            with self.assertRaisesRegex(ValueError, "belong to the current user"):
+                build_environment.check_environment(identity, self.values["IOS_LOCAL_HOME"],
+                                                    self.values["IOS_LOCAL_PUB_CACHE"], self.values["IOS_LOCAL_TMPDIR"])
+
+    def test_private_configuration_invalid_encoding_and_size_are_preserved(self):
+        path = self.root / "home/.config/flutter/settings"
+        path.parent.mkdir(parents=True)
+        for raw in (b"\xff", '{"build-dir":"build"}'.encode("utf-16"), b'"' + b"a" * (1024 * 1024) + b'"'):
+            with self.subTest(bytes=len(raw)):
+                path.write_bytes(raw)
+                self.assert_blocked(self.run_make())
+                self.assertEqual(path.read_bytes(), raw)
+
+    def test_private_configuration_special_files_are_rejected_without_opening(self):
+        path = self.root / "home/.config/flutter/settings"
+        path.parent.mkdir(parents=True)
+        os.mkfifo(path)
+        self.assert_blocked(self.run_make())
+        self.assertTrue(path.exists())
 
     def test_inherited_xdg_cannot_redirect_the_actual_output_directory(self):
         inherited = self.root / "inherited-config"
